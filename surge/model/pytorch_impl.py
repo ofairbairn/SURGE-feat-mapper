@@ -107,7 +107,7 @@ class PyTorchMLP(nn.Module if TORCH_AVAILABLE else object):
 
         self.input_size = input_size
         self.output_size = output_size
-        self.learning_rate = learning_rate
+        self.learning_rate = float(learning_rate)
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.dataloader_num_workers = int(dataloader_num_workers)
@@ -447,7 +447,7 @@ class PyTorchMLPModel:
         self.hidden_layers = hidden_layers
         self.dropout_rate = dropout_rate
         self.activation_fn = activation_fn
-        self.learning_rate = learning_rate
+        self.learning_rate = float(learning_rate)
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.patience = patience

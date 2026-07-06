@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 import numpy as np
-
-from surge.registry import BaseModelAdapter, MODEL_REGISTRY
+#from surge.registry import BaseModelAdapter, MODEL_REGISTRY
+#old line caused KeyError: 'torch.cnn' when registering the adapter, because the registry was not yet initialized.
+#use this import instead 
+from surge.model import BaseModelAdapter, MODEL_REGISTRY
 
 try:
     import torch
@@ -263,24 +265,32 @@ class CNNAdapter(BaseModelAdapter):
 
 
 # Register the adapter
+#old
+# # if TORCH_AVAILABLE:
+#     MODEL_REGISTRY.register(
+#         CNNAdapter,
+#         key="torch.cnn",
+#         name="PyTorch CNN",
+#         backend="torch",
+#         description="1D Convolutional Neural Network for tabular data",
+#         tags=["cnn", "torch", "deep_learning"],
+#         aliases=["cnn", "conv1d", "torch_cnn"],
+#         default_params={
+#             "conv_channels": (64, 128, 256),
+#             "kernel_sizes": (3, 3, 3),
+#             "dropout": 0.2,
+#             "fc_layers": (128,),
+#             "batch_size": 256,
+#             "learning_rate": 1e-3,
+#             "epochs": 200,
+#         },
+#     )
+#suggested change
 if TORCH_AVAILABLE:
     MODEL_REGISTRY.register(
+        "torch.cnn",
         CNNAdapter,
-        key="torch.cnn",
-        name="PyTorch CNN",
-        backend="torch",
-        description="1D Convolutional Neural Network for tabular data",
-        tags=["cnn", "torch", "deep_learning"],
         aliases=["cnn", "conv1d", "torch_cnn"],
-        default_params={
-            "conv_channels": (64, 128, 256),
-            "kernel_sizes": (3, 3, 3),
-            "dropout": 0.2,
-            "fc_layers": (128,),
-            "batch_size": 256,
-            "learning_rate": 1e-3,
-            "epochs": 200,
-        },
     )
 
 

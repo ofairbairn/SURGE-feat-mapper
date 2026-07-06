@@ -6,8 +6,19 @@ dataset creation workflows.
 """
 
 from .generator import DataGenerator, save_sampling_plots
+from .converters import (
+    convert_mnist_npy_to_csv,
+    convert_mnist_npy_to_parquet,
+    convert_npy_to_csv,
+)
 
-__all__ = ["DataGenerator", "save_sampling_plots"]
+__all__ = [
+    "DataGenerator",
+    "save_sampling_plots",
+    "convert_mnist_npy_to_csv",
+    "convert_mnist_npy_to_parquet",
+    "convert_npy_to_csv",
+]
 
 
 

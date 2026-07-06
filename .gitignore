@@ -211,10 +211,32 @@ templates/internal/
 
 # DataGenerator batch outputs (generated data, not tracked)
 examples/datagen/batch*/
+examples/data/*
+!examples/data/.gitkeep
 
 # Large datasets and workflow outputs
 runs/
 runs
+
+# Benchmark run outputs (timestamped result directories and CatBoost logs)
+# Only the .plots/ subdirectory and top-level result JSONs are tracked.
+benchmark_reports/*/
+!benchmark_reports/.plots/
+!benchmark_reports/.leaderboard_tables/
+catboost_info/
+
+# Cached HuggingFace / processed plasma datasets (large, re-downloadable)
+data/datasets/constellaration/
+
+# Benchmark runtime data cache (downloaded or generated on first run).
+# Directory skeleton (subdirs + .gitkeep files) IS tracked; data files are not.
+data/datasets/benchmarks/**
+!data/datasets/benchmarks/**/
+!data/datasets/benchmarks/**/.gitkeep
+
+# Conda environment backup files
+hall_backup.yml
+hall_pip_requirements.txt
 
 # Reference runs archive (ai4fusion-dev: local only, not committed)
 data/runs/

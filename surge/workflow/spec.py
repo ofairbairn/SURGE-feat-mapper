@@ -71,6 +71,8 @@ class SurrogateWorkflowSpec:
     batch_dir_psi_step: Optional[int] = None
     batch_dir_target_shape: Optional[tuple] = None  # (n_modes, n_psi) for fixed resolution
     batch_dir_include_eigenmodes: bool = False
+    task_type: str = "regression" #added line for specifying task type, can be "regression" or "classification"
+    #needed it so that the workflow can be used for classification tasks as well (mnist for Owen)
     # HDF5 leaf name under run*/sparc_* (default: sdata_pertfields_grid_complex_v2.h5).
     # Use sdata_complex_v2.h5 on CFS-style trees where that file holds nonsymmetric δp modes.
     batch_dir_filename: Optional[str] = None

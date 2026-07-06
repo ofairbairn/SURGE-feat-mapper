@@ -4,6 +4,7 @@ from __future__ import annotations
 from .base import BaseModelAdapter, SklearnRegressorAdapter
 from .sklearn import GPRModel, MLPModel, RandomForestModel
 from .pytorch import PYTORCH_AVAILABLE, PyTorchMLPAdapter
+from .mnist_test_cnn import MNISTCNNAdapter
 from .gpflow import GPFLOW_AVAILABLE, GPflowGPRAdapter, GPflowMultiKernelAdapter
 from .ensembles import EnsemblePrediction, FNNEnsemble
 from .registry import MODEL_REGISTRY, create_model, list_models, register_model
@@ -17,6 +18,7 @@ register_model(
     key='pytorch.mlp',
     aliases=['torch_mlp', 'torch.mlp'],
 )
+register_model(MNISTCNNAdapter, key='pytorch.mnist_cnn', aliases=['mnist_cnn', 'torch.mnist_cnn'])
 register_model(GPflowGPRAdapter, key='gpflow.gpr', aliases=['gp_gpr'])
 register_model(GPflowMultiKernelAdapter, key='gpflow.multi_kernel', aliases=['gpflow_mk'])
 
@@ -27,6 +29,7 @@ __all__ = [
     "MLPModel",
     "GPRModel",
     "PyTorchMLPAdapter",
+    "MNISTCNNAdapter", #example for Owen
     "GPflowGPRAdapter",
     "GPflowMultiKernelAdapter",
     "FNNEnsemble",
