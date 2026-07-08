@@ -138,6 +138,7 @@ class VAEModel:
         self._net: Any = None
         self.is_fitted = False
         self._n_outputs = 1
+        self._class_labels: Optional[np.ndarray] = None
         self.training_history: list[dict] = []
 
     def fit(self, X, y, **_: Any) -> "VAEModel":
@@ -148,13 +149,21 @@ class VAEModel:
         y_arr = np.asarray(y, dtype=np.float64)
         if y_arr.ndim == 1:
             y_arr = y_arr[:, None]
-        self._n_outputs = y_arr.shape[1]
 
         Xs = self.scaler_X.fit_transform(X_arr)
         if self.task == "regression":
+            self._n_outputs = y_arr.shape[1]
             ys = self.scaler_y.fit_transform(y_arr)
         else:
-            ys = y_arr
+            labels = np.asarray(y_arr).reshape(-1)
+            if np.all(np.isfinite(labels)) and np.allclose(labels, np.round(labels)):
+                labels = labels.astype(np.int64)
+            self._class_labels = np.unique(labels)
+            if self._class_labels.size < 2:
+                raise ValueError("Classification VAE requires at least two classes")
+            self._n_outputs = int(self._class_labels.size)
+            class_to_index = {label: idx for idx, label in enumerate(self._class_labels)}
+            ys = np.asarray([class_to_index[label] for label in labels], dtype=np.int64)
 
         n_in = Xs.shape[1]
         n_out = self._n_outputs
@@ -166,7 +175,7 @@ class VAEModel:
         if self.task == "regression":
             yt = torch.from_numpy(ys.astype(np.float32))
         else:
-            yt = torch.from_numpy(ys.ravel().astype(np.int64))
+            yt = torch.from_numpy(ys.astype(np.int64))
 
         # Cap batch size to at most 10% of training data so small datasets
         # (e.g. diabetes, n=309 train) get enough gradient steps per epoch.
@@ -227,7 +236,10 @@ class VAEModel:
         if self.task == "regression":
             out = self.scaler_y.inverse_transform(y_hat)
             return out.ravel() if self._n_outputs == 1 else out
-        return y_hat.argmax(axis=1)
+        pred_idx = y_hat.argmax(axis=1)
+        if self._class_labels is None:
+            return pred_idx
+        return self._class_labels[pred_idx]
 
     def predict_with_uncertainty(self, X, n_samples: int = 50) -> tuple[np.ndarray, np.ndarray]:
         """Sample from posterior and return mean + std."""
@@ -261,6 +273,7 @@ class VAEModel:
             },
             "net_state": self._net.state_dict() if self._net else None,
             "scaler_X": self.scaler_X, "scaler_y": self.scaler_y,
+            "class_labels": self._class_labels,
             "is_fitted": self.is_fitted,
         }, path)
 
@@ -270,6 +283,7 @@ class VAEModel:
         cfg = d["config"]
         self.scaler_X = d["scaler_X"]
         self.scaler_y = d["scaler_y"]
+        self._class_labels = d.get("class_labels")
         self.is_fitted = d["is_fitted"]
         self._n_outputs = cfg["n_outputs"]
         self._net = _VAENet(cfg["n_in"], cfg["latent_dim"], cfg["hidden_dim"], cfg["n_outputs"], cfg["task"]).to(self.device)

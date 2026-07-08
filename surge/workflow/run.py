@@ -509,7 +509,6 @@ def _persist_model_artifacts(
         th_path = paths.root / f"training_history_{tag}.json"
         with th_path.open("w", encoding="utf-8") as handle:
             json.dump(th, handle, indent=2)
-<<<<<<< HEAD
         artifact_extra["training_history"] = posix_str(th_path)
         log_path = paths.root / f"training_log_{tag}.jsonl"
         try:
@@ -535,59 +534,6 @@ def _persist_model_artifacts(
                 model_name,
                 exc_info=True,
             )
-=======
-        artifact_extra["training_history"] = str(th_path)
-        # Attempt to render training plots (loss + accuracy) when history contains epoch entries.
-        # made for pytorch backends (cnn mnist example), but other backends can also emit training_history if they support it.
-        try:
-            import matplotlib.pyplot as plt
-            import seaborn as sns
-
-            # Extract series from history entries (list of dicts)
-            train_loss_list = [e.get("train_loss") for e in th if e.get("train_loss") is not None]
-            # Validation accuracy might be stored under different keys; try common variants
-            validation_accuracy_list = [
-                e.get("val_accuracy")
-                or e.get("validation_accuracy")
-                or e.get("val_acc")
-                for e in th
-            ]
-            # Clean None values
-            validation_accuracy_list = [v for v in validation_accuracy_list if v is not None]
-
-            # Plot if we have at least training loss (validation is optional)
-            if train_loss_list:
-                sns.set(style="whitegrid")
-                
-                # Determine subplot layout: 2 rows if we have validation, 1 row otherwise
-                n_subplots = 2 if validation_accuracy_list else 1
-                fig = plt.figure(figsize=(12, 6 * n_subplots) if n_subplots > 1 else (12, 5))
-
-                # Visualize training loss with respect to epochs
-                plt.subplot(n_subplots, 1, 1)
-                plt.plot(train_loss_list, linewidth=3)
-                plt.ylabel("training loss")
-                plt.xlabel("epochs")
-                sns.despine()
-
-                # Visualize validation accuracy if available
-                if validation_accuracy_list:
-                    plt.subplot(n_subplots, 1, 2)
-                    plt.plot(validation_accuracy_list, linewidth=3, color="gold")
-                    plt.ylabel("validation accuracy")
-                    plt.xlabel("epochs")
-                    sns.despine()
-
-                loss_path = paths.root / f"training_plot_{tag}_loss_accuracy.png"
-                fig.tight_layout()
-                fig.savefig(loss_path)
-                plt.close(fig)
-                artifact_extra["training_plots"] = str(loss_path)
-        except Exception:
-            # plotting is optional; ignore failures
-            pass
-    tag = _safe_model_artifact_tag(model_name)
->>>>>>> myfork/SURGE-feat-mapper
     prog_jsonl = paths.root / f"training_progress_{tag}.jsonl"
     if prog_jsonl.is_file() and prog_jsonl.stat().st_size > 0:
         artifact_extra["training_progress_jsonl"] = posix_str(prog_jsonl.resolve())

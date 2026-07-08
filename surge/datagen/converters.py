@@ -25,8 +25,8 @@ Example:
 """
 
 from pathlib import Path
-from typing import Optional, Union
-
+from typing import Optional, Union, Sequence
+import json
 import numpy as np
 import pandas as pd
 
@@ -364,6 +364,122 @@ def convert_npy_to_csv(
 
     return output_path
 
+"""
+Single function that covers CSV, Parquet, JSON, and HDF5 and automatically handles image vs tabular shapes
+Later, look into refining this whole converters.py module to avoid redundancy
+N.B. requires h5py for HDF5 support, and pyarrow for Parquet support
+THIS NEEDS TO BE WORKED ON AND IS NOT COMPLETE OR FULLY TESTED YET
+"""
+def convert_npy_to_format(
+    features_path: Union[str, Path],
+    targets_path: Optional[Union[str, Path]],
+    output_path: Union[str, Path],
+    *,
+    format: str = "csv",                 # "csv", "parquet", "json", "hdf5"
+    feature_names: Optional[Sequence[str]] = None,
+    target_name: str = "target",
+    normalize: bool = False,
+    flatten_images_for_tabular: bool = True,
+    image_shape_meta: bool = True,
+    parquet_engine: str = "pyarrow",
+    verbose: bool = True,
+) -> Path:
+    features_path = Path(features_path)
+    output_path = Path(output_path)
+
+    if not features_path.exists():
+        raise FileNotFoundError(f"Features file not found: {features_path}")
+    if targets_path is not None:
+        targets_path = Path(targets_path)
+        if not targets_path.exists():
+            raise FileNotFoundError(f"Targets file not found: {targets_path}")
+
+    X = np.load(features_path)
+    y = None if targets_path is None else np.load(targets_path)
+
+    # Optionally normalize numeric range
+    if normalize:
+        X = X.astype(np.float32)
+        X = (X - X.min()) / max(1e-12, (X.max() - X.min()))
+
+    # If image-shaped and user wants tabular output, flatten
+    is_image = X.ndim > 2
+    if is_image and flatten_images_for_tabular and format in ("csv", "parquet", "json"):
+        n_samples = X.shape[0]
+        flat_dim = int(np.prod(X.shape[1:]))
+        X_flat = X.reshape(n_samples, flat_dim)
+        X_out = X_flat
+        if feature_names is None:
+            feature_names = [f"pixel_{i}" for i in range(flat_dim)]
+        if image_shape_meta:
+            meta = {"original_shape": X.shape[1:]}
+    else:
+        # Ensure 2D for tabular formats; for HDF5 we can keep original shape
+        if X.ndim == 1:
+            X_out = X.reshape(-1, 1)
+        elif X.ndim == 2:
+            X_out = X
+        else:
+            X_out = X  # keep multidim for HDF5
+        if feature_names is None and X_out.ndim == 2:
+            feature_names = [f"feature_{i}" for i in range(X_out.shape[1])]
+
+    # Save according to format
+    if format == "csv":
+        if X_out.ndim != 2:
+            raise ValueError("CSV requires 2D tabular data; set flatten_images_for_tabular=True")
+        df = pd.DataFrame(X_out, columns=list(feature_names))
+        if y is not None:
+            df[target_name] = y.reshape(-1)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(output_path, index=False)
+    elif format == "parquet":
+        if X_out.ndim != 2:
+            raise ValueError("Parquet requires 2D tabular data; set flatten_images_for_tabular=True")
+        df = pd.DataFrame(X_out, columns=list(feature_names))
+        if y is not None:
+            df[target_name] = y.reshape(-1)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(output_path, index=False, engine=parquet_engine)
+    elif format == "json":
+        if X_out.ndim != 2:
+            raise ValueError("JSON tabular export requires 2D data; consider HDF5 for arrays")
+        df = pd.DataFrame(X_out, columns=list(feature_names))
+        if y is not None:
+            df[target_name] = y.reshape(-1)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_json(output_path, orient="records", lines=False)
+    elif format == "hdf5":
+        import h5py
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(output_path, "w") as f:
+            f.create_dataset("features", data=X, compression="gzip")
+            if y is not None:
+                f.create_dataset("targets", data=y, compression="gzip")
+            if image_shape_meta and is_image:
+                f.attrs["original_feature_shape"] = json.dumps(X.shape[1:])
+    else:
+        raise ValueError(f"Unsupported format: {format}")
+
+    if verbose:
+        print(f"Saved {output_path} (format={format})")
+    return output_path
+###### EXAMPLE USE OF convert_npy_to_format #######
+# # CSV (flatten images)
+# convert_npy_to_format(
+#     "mnist_train_features.npy",
+#     "mnist_train_targets.npy",
+#     "mnist_train.csv",
+#     format="csv",
+#     normalize=True
+# )
+
+# # Parquet (tabular)
+# convert_npy_to_format("features.npy", "targets.npy", "data.parquet", format="parquet")
+
+# # HDF5 (preserve image shape)
+# convert_npy_to_format("features.npy", "targets.npy", "data.h5", format="hdf5", flatten_images_for_tabular=False)
+###################################################
 
 __all__ = [
     "convert_mnist_npy_to_csv",
