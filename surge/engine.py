@@ -19,6 +19,14 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from .hpc import ResourcePolicyError, ResourceSpec
+from .metrics import (
+    accuracy_score as surge_accuracy_score,
+    auroc as surge_auroc,
+    expected_calibration_error as surge_expected_calibration_error,
+    f1_score as surge_f1_score,
+    log_loss as surge_log_loss,
+    top_k_accuracy_score as surge_top_k_accuracy_score,
+)
 from .registry import BaseModelAdapter, ModelRegistry
 from .model.registry import MODEL_REGISTRY
 
@@ -507,10 +515,28 @@ class SurrogateEngine:
         y_pred_val = self._ensure_2d(adapter.predict(proc.X_val))
         pred_val_time = time.perf_counter() - pred_val_start
 
+        y_prob_train = None
+        y_prob_val = None
+        y_prob_test = None
+        if self.config.task_type == "classification" and hasattr(adapter, "predict_proba"):
+            try:
+                y_prob_train = np.asarray(adapter.predict_proba(proc.X_train))
+            except Exception:
+                y_prob_train = None
+            try:
+                y_prob_val = np.asarray(adapter.predict_proba(proc.X_val))
+            except Exception:
+                y_prob_val = None
+
         if proc.X_test is not None:
             pred_test_start = time.perf_counter()
             y_pred_test = self._ensure_2d(adapter.predict(proc.X_test))
             pred_test_time = time.perf_counter() - pred_test_start
+            if self.config.task_type == "classification" and hasattr(adapter, "predict_proba"):
+                try:
+                    y_prob_test = np.asarray(adapter.predict_proba(proc.X_test))
+                except Exception:
+                    y_prob_test = None
         else:
             y_pred_test = None
             pred_test_time = None
@@ -571,10 +597,10 @@ class SurrogateEngine:
                     spec.key,
                 )
 
-        metrics_train = self._compute_metrics(raw.y_train, y_pred_train)
-        metrics_val = self._compute_metrics(raw.y_val, y_pred_val)
+        metrics_train = self._compute_metrics(raw.y_train, y_pred_train, y_prob=y_prob_train)
+        metrics_val = self._compute_metrics(raw.y_val, y_pred_val, y_prob=y_prob_val)
         metrics_test = (
-            self._compute_metrics(raw.y_test, y_pred_test)
+            self._compute_metrics(raw.y_test, y_pred_test, y_prob=y_prob_test)
             if raw.y_test is not None and y_pred_test is not None
             else None
         )
@@ -631,7 +657,7 @@ class SurrogateEngine:
     # ------------------------------------------------------------------
     # Metrics helpers
     # ------------------------------------------------------------------
-    def _compute_metrics(self, y_true, y_pred) -> Dict[str, float]:
+    def _compute_metrics(self, y_true, y_pred, *, y_prob: Any = None) -> Dict[str, float]:
         if y_true is None or y_pred is None:
             return {}
         y_true = np.asarray(y_true)
@@ -671,16 +697,39 @@ class SurrogateEngine:
 
         # Classification metrics branch
         if self.config.task_type == "classification":
-            # Compute accuracy if requested (or always include it)
+            # Classification metrics are evaluated on predicted class labels.
+            # Probability-based metrics belong on the predict_proba path and
+            # are not available for every adapter yet.
             try:
-                from sklearn.metrics import accuracy_score
-
-                # Flatten arrays for accuracy computation
                 y_t = y_true.ravel() if hasattr(y_true, "ravel") else y_true
                 y_p = y_pred.ravel() if hasattr(y_pred, "ravel") else y_pred
-                metrics["accuracy"] = float(accuracy_score(y_t, y_p))
+                metrics["accuracy"] = surge_accuracy_score(y_t, y_p)
+                metrics["f1_macro"] = surge_f1_score(
+                    y_t,
+                    y_p,
+                    average="macro",
+                    zero_division=0,
+                )
+
+                if y_prob is not None:
+                    y_prob_arr = np.asarray(y_prob)
+                    metrics["log_loss"] = surge_log_loss(y_t, y_prob_arr)
+                    metrics["ece"] = surge_expected_calibration_error(y_t, y_prob_arr)
+
+                    if y_prob_arr.ndim == 1:
+                        metrics["auroc"] = surge_auroc(y_t, y_prob_arr)
+                    elif y_prob_arr.ndim == 2 and y_prob_arr.shape[1] >= 2:
+                        metrics["auroc"] = surge_auroc(y_t, y_prob_arr)
+                        if y_prob_arr.shape[1] > 2:
+                            top_k = min(5, int(y_prob_arr.shape[1]) - 1)
+                            if top_k >= 1:
+                                metrics["top_5_accuracy"] = surge_top_k_accuracy_score(
+                                    y_t,
+                                    y_prob_arr,
+                                    k=top_k,
+                                )
             except Exception:
-                # If sklearn not available or shapes unexpected, skip accuracy
+                # If metrics are unavailable or shapes are unexpected, skip.
                 pass
 
             # Keep compatibility: also allow returning probabilities-based metrics
