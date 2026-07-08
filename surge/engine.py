@@ -36,6 +36,8 @@ class EngineRunConfig:
     shuffle: bool = True
     random_state: Optional[int] = 42
     metrics: Tuple[str, ...] = ("r2", "rmse", "mae", "mape")
+    # "regression" or "classification" — affects which metric set is computed
+    task_type: str = "regression"
     # Declarative compute request propagated into every model trained by
     # this engine (device, num_workers, strict policy). See
     # surge.hpc.policy.ResourceSpec for semantics.
@@ -636,34 +638,54 @@ class SurrogateEngine:
         y_pred = np.asarray(y_pred)
         metrics: Dict[str, float] = {}
 
-        if "r2" in self.config.metrics:
-            if y_true.ndim == 2 and y_true.shape[1] > 1:
-                metrics["r2"] = float(
-                    r2_score(y_true, y_pred, multioutput="variance_weighted")
-                )
-                metrics["r2_uniform_average"] = float(
-                    r2_score(y_true, y_pred, multioutput="uniform_average")
-                )
-            else:
-                metrics["r2"] = float(r2_score(y_true, y_pred))
-        if "rmse" in self.config.metrics or "mse" in self.config.metrics:
-            mse = mean_squared_error(y_true, y_pred, multioutput="uniform_average")
-            if "mse" in self.config.metrics:
-                metrics["mse"] = float(mse)
-            if "rmse" in self.config.metrics:
-                metrics["rmse"] = float(np.sqrt(mse))
-        if "mae" in self.config.metrics:
-            metrics["mae"] = float(
-                mean_absolute_error(y_true, y_pred, multioutput="uniform_average")
-            )
-        if "mape" in self.config.metrics:
-            with np.errstate(divide="ignore", invalid="ignore"):
-                metrics["mape"] = float(
-                    mean_absolute_percentage_error(
-                        y_true, y_pred, multioutput="uniform_average"
+        # Regression metrics (default)
+        if self.config.task_type == "regression":
+            if "r2" in self.config.metrics:
+                if y_true.ndim == 2 and y_true.shape[1] > 1:
+                    metrics["r2"] = float(
+                        r2_score(y_true, y_pred, multioutput="variance_weighted")
                     )
+                    metrics["r2_uniform_average"] = float(
+                        r2_score(y_true, y_pred, multioutput="uniform_average")
+                    )
+                else:
+                    metrics["r2"] = float(r2_score(y_true, y_pred))
+            if "rmse" in self.config.metrics or "mse" in self.config.metrics:
+                mse = mean_squared_error(y_true, y_pred, multioutput="uniform_average")
+                if "mse" in self.config.metrics:
+                    metrics["mse"] = float(mse)
+                if "rmse" in self.config.metrics:
+                    metrics["rmse"] = float(np.sqrt(mse))
+            if "mae" in self.config.metrics:
+                metrics["mae"] = float(
+                    mean_absolute_error(y_true, y_pred, multioutput="uniform_average")
                 )
-        return metrics
+            if "mape" in self.config.metrics:
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    metrics["mape"] = float(
+                        mean_absolute_percentage_error(
+                            y_true, y_pred, multioutput="uniform_average"
+                        )
+                    )
+            return metrics
+
+        # Classification metrics branch
+        if self.config.task_type == "classification":
+            # Compute accuracy if requested (or always include it)
+            try:
+                from sklearn.metrics import accuracy_score
+
+                # Flatten arrays for accuracy computation
+                y_t = y_true.ravel() if hasattr(y_true, "ravel") else y_true
+                y_p = y_pred.ravel() if hasattr(y_pred, "ravel") else y_pred
+                metrics["accuracy"] = float(accuracy_score(y_t, y_p))
+            except Exception:
+                # If sklearn not available or shapes unexpected, skip accuracy
+                pass
+
+            # Keep compatibility: also allow returning probabilities-based metrics
+            # in future (e.g. log_loss, auroc) when predict_proba is available.
+            return metrics
 
     # ------------------------------------------------------------------
     # Introspection utilities

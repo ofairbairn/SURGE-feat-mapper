@@ -20,6 +20,8 @@ from .sklearn import (
 )
 from .pytorch import PYTORCH_AVAILABLE, PyTorchMLPAdapter
 from .gpflow import GPflowGPRAdapter, GPflowMultiKernelAdapter
+from .mnist_test_cnn import MNISTCNNAdapter
+from .gpflow import GPFLOW_AVAILABLE, GPflowGPRAdapter, GPflowMultiKernelAdapter
 from .ensembles import EnsemblePrediction, FNNEnsemble
 from .registry import MODEL_REGISTRY, create_model, list_models, register_model
 
@@ -32,6 +34,7 @@ register_model(
     key='pytorch.mlp',
     aliases=['torch_mlp', 'torch.mlp'],
 )
+register_model(MNISTCNNAdapter, key='pytorch.mnist_cnn', aliases=['mnist_cnn', 'torch.mnist_cnn'])
 register_model(GPflowGPRAdapter, key='gpflow.gpr', aliases=['gp_gpr'])
 register_model(GPflowMultiKernelAdapter, key='gpflow.multi_kernel', aliases=['gpflow_mk'])
 register_model(RandomForestClassifierAdapter, key='sklearn.random_forest_classifier', aliases=['rf_classifier', 'rfc'])
@@ -281,6 +284,7 @@ __all__ = [
     "GradientBoostingRegressorModel",
     "LogisticRegressionAdapter",
     "PyTorchMLPAdapter",
+    "MNISTCNNAdapter", #example for Owen
     "GPflowGPRAdapter",
     "GPflowMultiKernelAdapter",
     "FNNEnsemble",
