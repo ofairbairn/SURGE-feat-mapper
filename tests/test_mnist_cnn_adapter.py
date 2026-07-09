@@ -1,5 +1,5 @@
 import numpy as np
-#test script for mnist_test_cnn.py for Owen
+#test script for mnist_test_cnn.py
 from surge.model.mnist_test_cnn import MNISTCNNAdapter
 
 

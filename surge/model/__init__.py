@@ -284,7 +284,7 @@ __all__ = [
     "GradientBoostingRegressorModel",
     "LogisticRegressionAdapter",
     "PyTorchMLPAdapter",
-    "MNISTCNNAdapter", #example for Owen
+    "MNISTCNNAdapter", 
     "GPflowGPRAdapter",
     "GPflowMultiKernelAdapter",
     "FNNEnsemble",
