@@ -20,6 +20,13 @@ except ImportError:
     YAML_AVAILABLE = False
 
 from .comparison import plot_inference_comparison_grid
+from .classification import (
+    plot_calibration_curve,
+    plot_classification_dashboard,
+    plot_confusion_matrix,
+    plot_precision_recall_curve,
+    plot_roc_curve,
+)
 from .hpo import plot_hpo_convergence
 
 LOG = logging.getLogger(__name__)
@@ -90,6 +97,192 @@ def load_predictions(
 def _model_short_name(name: str) -> str:
     """Convert model filename to short display name."""
     return DEFAULT_MODEL_DISPLAY.get(name, name.replace("_", " ").title())
+
+
+def _is_classification_run(run_dir: Path) -> bool:
+    """Best-effort task-type detection from workflow summary metrics."""
+    summary_path = run_dir / "workflow_summary.json"
+    if not summary_path.exists():
+        return False
+    try:
+        with summary_path.open("r", encoding="utf-8") as handle:
+            summary = json.load(handle)
+        for model in summary.get("models", []):
+            metrics = model.get("metrics", {})
+            for split in ("train", "val", "test"):
+                split_metrics = metrics.get(split) or {}
+                if "accuracy" in split_metrics or "f1_macro" in split_metrics:
+                    return True
+    except Exception:
+        return False
+    return False
+
+
+def _resolve_task_type(run_dir: Path) -> str:
+    """Resolve workflow task type with spec.yaml first, metrics as fallback."""
+    spec_path = run_dir / "spec.yaml"
+    if spec_path.exists() and YAML_AVAILABLE:
+        try:
+            with spec_path.open("r", encoding="utf-8") as handle:
+                spec_payload = yaml.safe_load(handle) or {}
+            task_type = str(spec_payload.get("task_type", "")).strip().lower()
+            if task_type in {"regression", "classification"}:
+                return task_type
+        except Exception:
+            pass
+
+    return "classification" if _is_classification_run(run_dir) else "regression"
+
+
+def _load_prediction_frames(
+    run_dir: Path,
+    datasets: Tuple[str, ...] = ("train", "val", "test"),
+) -> Dict[str, Dict[str, pd.DataFrame]]:
+    """Load prediction tables keyed by model and split."""
+    predictions_dir = run_dir / "predictions"
+    if not predictions_dir.exists():
+        return {}
+
+    pred_files = sorted(
+        list(predictions_dir.glob("*.parquet")) + list(predictions_dir.glob("*.csv"))
+    )
+
+    frames: Dict[str, Dict[str, pd.DataFrame]] = {}
+    for pred_file in pred_files:
+        if "_uq" in pred_file.stem:
+            continue
+        dataset_type = (
+            "train"
+            if "_train" in pred_file.name
+            else ("val" if "_val" in pred_file.name else "test")
+        )
+        if dataset_type not in datasets:
+            continue
+        stem = pred_file.stem
+        model_name = stem.replace("_train", "").replace("_val", "").replace("_test", "")
+
+        # Keep parquet when both parquet and csv exist for the same model/split.
+        if model_name in frames and dataset_type in frames[model_name]:
+            continue
+
+        if pred_file.suffix == ".parquet":
+            df = pd.read_parquet(pred_file)
+        else:
+            df = pd.read_csv(pred_file)
+        frames.setdefault(model_name, {})[dataset_type] = df
+    return frames
+
+
+def viz_classification(
+    run_dir: Path,
+    output_dir: Path,
+    *,
+    datasets: Tuple[str, ...] = ("train", "val", "test"),
+) -> List[str]:
+    """Emit classification diagnostics for each model/split with available predictions."""
+    frames = _load_prediction_frames(run_dir, datasets=datasets)
+    if not frames:
+        return []
+
+    saved_paths: List[str] = []
+    for model_name, model_splits in frames.items():
+        model_dir = output_dir / f"classification_{model_name}"
+        model_dir.mkdir(parents=True, exist_ok=True)
+
+        for split, df in model_splits.items():
+            y_true_cols = sorted([c for c in df.columns if c.startswith("y_true_")])
+            y_pred_cols = sorted([c for c in df.columns if c.startswith("y_pred_")])
+            if not y_true_cols or not y_pred_cols:
+                continue
+
+            y_true = np.asarray(df[y_true_cols[0]].values)
+            y_pred = np.asarray(df[y_pred_cols[0]].values)
+            classes = np.unique(np.concatenate([y_true, y_pred], axis=0))
+            labels = [str(c) for c in classes]
+
+            cm_path = model_dir / f"{split}_confusion_matrix.png"
+            try:
+                plot_confusion_matrix(
+                    y_true,
+                    y_pred,
+                    labels=labels,
+                    title=f"{_model_short_name(model_name)} {split} confusion",
+                    save_path=cm_path,
+                )
+                saved_paths.append(str(cm_path))
+            except Exception as exc:
+                LOG.warning("Confusion matrix failed for %s %s: %s", model_name, split, exc)
+
+            y_prob_cols = sorted([c for c in df.columns if c.startswith("y_prob_")])
+            if "y_prob" in df.columns:
+                y_prob = np.asarray(df["y_prob"].values)
+            elif y_prob_cols:
+                y_prob = np.asarray(df[y_prob_cols].values)
+            else:
+                y_prob = None
+
+            if y_prob is None:
+                LOG.info(
+                    "Skipping ROC/PR/calibration dashboard for %s %s: no y_prob columns in predictions.",
+                    model_name,
+                    split,
+                )
+                continue
+
+            roc_path = model_dir / f"{split}_roc_curve.png"
+            pr_path = model_dir / f"{split}_precision_recall_curve.png"
+            cal_path = model_dir / f"{split}_calibration_curve.png"
+            dash_path = model_dir / f"{split}_classification_dashboard.png"
+
+            try:
+                plot_roc_curve(
+                    y_true,
+                    y_prob,
+                    labels=labels,
+                    title=f"{_model_short_name(model_name)} {split} ROC",
+                    save_path=roc_path,
+                )
+                saved_paths.append(str(roc_path))
+            except Exception as exc:
+                LOG.warning("ROC plot failed for %s %s: %s", model_name, split, exc)
+
+            try:
+                plot_precision_recall_curve(
+                    y_true,
+                    y_prob,
+                    labels=labels,
+                    title=f"{_model_short_name(model_name)} {split} PR",
+                    save_path=pr_path,
+                )
+                saved_paths.append(str(pr_path))
+            except Exception as exc:
+                LOG.warning("PR plot failed for %s %s: %s", model_name, split, exc)
+
+            try:
+                plot_calibration_curve(
+                    y_true,
+                    y_prob,
+                    title=f"{_model_short_name(model_name)} {split} calibration",
+                    save_path=cal_path,
+                )
+                saved_paths.append(str(cal_path))
+            except Exception as exc:
+                LOG.warning("Calibration plot failed for %s %s: %s", model_name, split, exc)
+
+            try:
+                plot_classification_dashboard(
+                    y_true,
+                    y_pred,
+                    y_prob,
+                    labels=labels,
+                    model_name=f"{_model_short_name(model_name)} ({split})",
+                    save_path=dash_path,
+                )
+                saved_paths.append(str(dash_path))
+            except Exception as exc:
+                LOG.warning("Classification dashboard failed for %s %s: %s", model_name, split, exc)
+
+    return saved_paths
 
 
 def viz_hpo(
@@ -212,62 +405,28 @@ def viz_run(
 
     all_r2: Dict[str, Any] = {}
     saved_paths: List[Path] = []
+    task_type = _resolve_task_type(run_dir)
+    is_classification = task_type == "classification"
 
-    for out_idx in output_indices:
-        out_name = f"output_{out_idx}"
-        results_dict = {out_name: {}}
-        for model_name in models:
-            results_dict[out_name][model_name] = {}
-            for ds in ("train", "val", "test"):
-                if ds in predictions[model_name] and out_idx in predictions[model_name][ds]:
-                    results_dict[out_name][model_name][ds] = predictions[model_name][ds][
-                        out_idx
-                    ]
-
-        if not results_dict[out_name]:
-            continue
-
-        save_path = output_dir / f"inference_comparison_{out_name}.png"
-        fig, axes, r2_results = plot_inference_comparison_grid(
-            results_dict,
-            units={out_name: "a.u."},
-            save_path=save_path,
-            dpi=dpi,
-            xlabel_prefix=xlabel_prefix,
-            ylabel_prefix=ylabel_prefix,
-            ylabel_include_model=False,
-            output_display_names=output_display,
-            model_display_names=model_display,
-            title_include_model_dataset=True,
-            layout="models_rows",
-            axis_lim=axis_lim,
-        )
-        all_r2[out_name] = r2_results
-        saved_paths.append(save_path)
-
-    # Combined grid if multiple outputs
-    if len(output_indices) > 1:
-        combined_dict = {}
+    if not is_classification:
         for out_idx in output_indices:
             out_name = f"output_{out_idx}"
-            combined_dict[out_name] = {}
+            results_dict = {out_name: {}}
             for model_name in models:
-                if model_name in predictions:
-                    combined_dict[out_name][model_name] = {}
-                    for ds in ("train", "val", "test"):
-                        if (
-                            ds in predictions[model_name]
-                            and out_idx in predictions[model_name][ds]
-                        ):
-                            combined_dict[out_name][model_name][ds] = predictions[
-                                model_name
-                            ][ds][out_idx]
+                results_dict[out_name][model_name] = {}
+                for ds in ("train", "val", "test"):
+                    if ds in predictions[model_name] and out_idx in predictions[model_name][ds]:
+                        results_dict[out_name][model_name][ds] = predictions[model_name][ds][
+                            out_idx
+                        ]
 
-        if len(combined_dict) > 1:
-            save_path = output_dir / "inference_comparison_grid.png"
+            if not results_dict[out_name]:
+                continue
+
+            save_path = output_dir / f"inference_comparison_{out_name}.png"
             fig, axes, r2_results = plot_inference_comparison_grid(
-                combined_dict,
-                units={k: "a.u." for k in combined_dict},
+                results_dict,
+                units={out_name: "a.u."},
                 save_path=save_path,
                 dpi=dpi,
                 xlabel_prefix=xlabel_prefix,
@@ -276,18 +435,59 @@ def viz_run(
                 output_display_names=output_display,
                 model_display_names=model_display,
                 title_include_model_dataset=True,
-                layout="outputs_rows",
+                layout="models_rows",
                 axis_lim=axis_lim,
             )
-            all_r2["combined"] = r2_results
+            all_r2[out_name] = r2_results
             saved_paths.append(save_path)
-    elif len(saved_paths) == 1:
-        # Single output: also save as inference_comparison_grid.png
-        import shutil
 
-        grid_path = output_dir / "inference_comparison_grid.png"
-        shutil.copy(saved_paths[0], grid_path)
-        saved_paths.append(grid_path)
+        # Combined grid if multiple outputs
+        if len(output_indices) > 1:
+            combined_dict = {}
+            for out_idx in output_indices:
+                out_name = f"output_{out_idx}"
+                combined_dict[out_name] = {}
+                for model_name in models:
+                    if model_name in predictions:
+                        combined_dict[out_name][model_name] = {}
+                        for ds in ("train", "val", "test"):
+                            if (
+                                ds in predictions[model_name]
+                                and out_idx in predictions[model_name][ds]
+                            ):
+                                combined_dict[out_name][model_name][ds] = predictions[
+                                    model_name
+                                ][ds][out_idx]
+
+            if len(combined_dict) > 1:
+                save_path = output_dir / "inference_comparison_grid.png"
+                fig, axes, r2_results = plot_inference_comparison_grid(
+                    combined_dict,
+                    units={k: "a.u." for k in combined_dict},
+                    save_path=save_path,
+                    dpi=dpi,
+                    xlabel_prefix=xlabel_prefix,
+                    ylabel_prefix=ylabel_prefix,
+                    ylabel_include_model=False,
+                    output_display_names=output_display,
+                    model_display_names=model_display,
+                    title_include_model_dataset=True,
+                    layout="outputs_rows",
+                    axis_lim=axis_lim,
+                )
+                all_r2["combined"] = r2_results
+                saved_paths.append(save_path)
+        elif len(saved_paths) == 1:
+            # Single output: also save as inference_comparison_grid.png
+            import shutil
+
+            grid_path = output_dir / "inference_comparison_grid.png"
+            shutil.copy(saved_paths[0], grid_path)
+            saved_paths.append(grid_path)
+
+    if is_classification:
+        cls_paths = viz_classification(run_dir, output_dir)
+        saved_paths.extend(Path(p) for p in cls_paths)
 
     # HPO convergence plots
     if include_hpo:
@@ -560,6 +760,8 @@ def _load_or_build_train_ranges(
     output_scaler: Optional[Any],
 ) -> Optional[Dict[str, Any]]:
     """Load train_data_ranges.json or build from training predictions if missing."""
+    from ..dataset import SurrogateDataset
+
     ranges_file = run_dir / "train_data_ranges.json"
     if ranges_file.exists():
         with ranges_file.open("r", encoding="utf-8") as f:

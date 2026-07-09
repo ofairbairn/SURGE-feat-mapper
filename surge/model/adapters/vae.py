@@ -90,6 +90,9 @@ class VAEAdapter(BaseModelAdapter):
     def predict(self, X: Any) -> Any:
         return self._model.predict(X)
 
+    def predict_proba(self, X: Any) -> Any:
+        return self._model.predict_proba(X)
+
     def predict_with_uncertainty(self, X: Any) -> tuple:
         return self._model.predict_with_uncertainty(X)
 

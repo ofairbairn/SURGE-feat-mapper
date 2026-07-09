@@ -575,17 +575,23 @@ class SurrogateEngine:
                 "y_true": raw.y_train,
                 "y_pred": y_pred_train,
             }
+            if y_prob_train is not None:
+                predictions["train"]["y_prob"] = y_prob_train
             predictions["val"] = {
                 "index": val_indices,
                 "y_true": raw.y_val,
                 "y_pred": y_pred_val,
             }
+            if y_prob_val is not None:
+                predictions["val"]["y_prob"] = y_prob_val
             if y_pred_test is not None and raw.y_test is not None:
                 predictions["test"] = {
                     "index": test_indices,
                     "y_true": raw.y_test,
                     "y_pred": y_pred_test,
                 }
+                if y_prob_test is not None:
+                    predictions["test"]["y_prob"] = y_prob_test
 
         uq_payload: Optional[Dict[str, Any]] = None
         if spec.request_uncertainty:

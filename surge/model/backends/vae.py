@@ -241,6 +241,27 @@ class VAEModel:
             return pred_idx
         return self._class_labels[pred_idx]
 
+    def predict_proba(self, X) -> np.ndarray:
+        """Return class probabilities for classification tasks."""
+        if self.task != "classification":
+            raise ValueError("predict_proba is only available for classification tasks")
+        if not self.is_fitted or self._net is None:
+            raise ValueError("Not fitted")
+
+        self._net.eval()
+        Xs = self.scaler_X.transform(np.asarray(X, dtype=np.float64))
+        Xt = torch.from_numpy(Xs.astype(np.float32)).to(self.device)
+
+        with torch.no_grad():
+            mu, _ = self._net.encode(Xt)
+            logits = self._net.head(mu).cpu().numpy()
+
+        # Numerically stable softmax.
+        logits -= logits.max(axis=1, keepdims=True)
+        exp_logits = np.exp(logits)
+        denom = exp_logits.sum(axis=1, keepdims=True)
+        return exp_logits / np.clip(denom, 1e-12, None)
+
     def predict_with_uncertainty(self, X, n_samples: int = 50) -> tuple[np.ndarray, np.ndarray]:
         """Sample from posterior and return mean + std."""
         self._net.train()  # enable dropout (none here, but keep consistent)
