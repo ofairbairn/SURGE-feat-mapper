@@ -54,3 +54,33 @@ def test_mnist_cnn_adapter_fit_predict_and_roundtrip(tmp_path):
     adapter.fit(X_train[:20], y_train[:20], X_val=X_val[:5], y_val=y_val[:5])
     assert len(adapter.training_history) > 0, "training_history should be repopulated after second fit"
 
+
+def test_mnist_cnn_adapter_supports_channel_last_and_custom_input_size():
+    """Validate NHWC support and non-28x28 input sizes."""
+    rng = np.random.default_rng(7)
+
+    # Synthetic 64x64 grayscale images in channel-last format.
+    X = rng.integers(0, 256, size=(24, 64, 64, 1), dtype=np.uint8)
+    y = np.array([i % 6 for i in range(24)], dtype=np.int64)
+
+    X_train, X_val = X[:18], X[18:]
+    y_train, y_val = y[:18], y[18:]
+
+    adapter = MNISTCNNAdapter(
+        input_size=(64, 64),
+        input_channels=1,
+        hidden_channels=(16, 32),
+        epochs=2,
+        batch_size=6,
+        learning_rate=1e-3,
+        device="cpu",
+    )
+    adapter.fit(X_train, y_train, X_val=X_val, y_val=y_val)
+
+    preds = adapter.predict(X_val)
+    probs = adapter.predict_proba(X_val)
+
+    assert preds.shape[0] == X_val.shape[0]
+    assert probs.shape == (X_val.shape[0], len(np.unique(y_train)))
+    np.testing.assert_allclose(probs.sum(axis=1), 1.0, rtol=1e-5, atol=1e-5)
+

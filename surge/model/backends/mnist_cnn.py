@@ -26,16 +26,28 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 class _MNISTCNN(nn.Module if TORCH_AVAILABLE else object):
-    """Small convolutional network for 28x28 grayscale images."""
+    """Small convolutional network that supports variable input spatial sizes."""
 
-    def __init__(self, num_classes: int = 10) -> None:
+    def __init__(
+        self,
+        num_classes: int = 10,
+        input_channels: int = 1,
+        hidden_channels: tuple[int, ...] = (16, 32),
+    ) -> None:
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for MNISTCNNModel. Install torch first.")
+        if len(hidden_channels) < 2:
+            raise ValueError("hidden_channels must have at least two entries")
         super().__init__()
-        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(input_channels, hidden_channels[0], kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(hidden_channels[0], hidden_channels[1], kernel_size=3, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.fc1 = nn.Linear(32 * 7 * 7, 64)
+
+        # Adaptive pooling makes the model input-size agnostic.
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
+
+        fc_in = hidden_channels[-1]
+        self.fc1 = nn.Linear(fc_in, 64)
         self.fc2 = nn.Linear(64, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[name-defined]
@@ -43,6 +55,7 @@ class _MNISTCNN(nn.Module if TORCH_AVAILABLE else object):
         x = self.pool(x)
         x = torch.relu(self.conv2(x))
         x = self.pool(x)
+        x = self.adaptive_pool(x)
         x = x.flatten(1)
         x = torch.relu(self.fc1(x))
         return self.fc2(x)
@@ -54,6 +67,9 @@ class MNISTCNNModel:
     def __init__(
         self,
         num_classes: int = 10,
+        input_size: tuple[int, int] | int = (28, 28),
+        input_channels: int = 1,
+        hidden_channels: tuple[int, ...] = (16, 32),
         epochs: int = 10,
         batch_size: int = 32,
         learning_rate: float = 1e-3,
@@ -66,6 +82,12 @@ class MNISTCNNModel:
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for MNISTCNNModel. Install torch first.")
         self.num_classes = int(num_classes)
+        if isinstance(input_size, int):
+            self.input_size = (int(input_size), int(input_size))
+        else:
+            self.input_size = (int(input_size[0]), int(input_size[1]))
+        self.input_channels = int(input_channels)
+        self.hidden_channels = tuple(int(h) for h in hidden_channels)
         self.epochs = int(epochs)
         self.batch_size = int(batch_size)
         self.learning_rate = float(learning_rate)
@@ -79,23 +101,35 @@ class MNISTCNNModel:
         self.training_history: list[dict[str, Any]] = []
 
     def _build_model(self, num_classes: int) -> _MNISTCNN:
-        return _MNISTCNN(num_classes=num_classes)
+        return _MNISTCNN(
+            num_classes=num_classes,
+            input_channels=self.input_channels,
+            hidden_channels=self.hidden_channels,
+        )
 
-    @staticmethod
-    def _prepare_features(X: Any) -> "torch.Tensor":  # type: ignore[name-defined]
+    def _prepare_features(self, X: Any) -> "torch.Tensor":  # type: ignore[name-defined]
         arr = np.asarray(X)
         if arr.ndim == 1:
             arr = arr.reshape(1, -1)
 
-        if arr.ndim == 2 and arr.shape[1] == 28 * 28:
-            arr = arr.reshape(-1, 1, 28, 28)
-        elif arr.ndim == 3 and arr.shape[1:] == (28, 28):
+        h, w = self.input_size
+        expected_flat = self.input_channels * h * w
+
+        if arr.ndim == 2 and arr.shape[1] == expected_flat:
+            arr = arr.reshape(-1, self.input_channels, h, w)
+        elif arr.ndim == 3 and self.input_channels == 1 and arr.shape[1:] == (h, w):
             arr = arr[:, None, :, :]
-        elif arr.ndim == 4 and arr.shape[1:] == (1, 28, 28):
+        elif arr.ndim == 4 and arr.shape[1:] == (self.input_channels, h, w):
             pass
+        elif arr.ndim == 4 and arr.shape[-1] == self.input_channels and arr.shape[1:3] == (h, w):
+            # Channel-last input (N, H, W, C) -> channel-first (N, C, H, W).
+            arr = np.transpose(arr, (0, 3, 1, 2))
         else:
             raise ValueError(
-                "MNISTCNNModel expects flattened 784 features or images shaped (N, 28, 28)"
+                f"MNISTCNNModel expects flattened {expected_flat} features, "
+                f"(N, H, W) with input_channels=1, or images shaped "
+                f"(N, C, H, W)/(N, H, W, C) matching input_size={self.input_size} "
+                f"and input_channels={self.input_channels}"
             )
 
         arr = arr.astype(np.float32)
@@ -245,6 +279,9 @@ class MNISTCNNModel:
             "num_classes": self._model.fc2.out_features,
             "params": {
                 "num_classes": self.num_classes,
+                "input_size": list(self.input_size),
+                "input_channels": self.input_channels,
+                "hidden_channels": list(self.hidden_channels),
                 "epochs": self.epochs,
                 "batch_size": self.batch_size,
                 "learning_rate": self.learning_rate,
@@ -259,7 +296,16 @@ class MNISTCNNModel:
     def load(self, filepath: str | Path) -> None:
         path = Path(filepath)
         payload = torch.load(path, map_location=self.device)
-        num_classes = int(payload.get("num_classes", payload.get("params", {}).get("num_classes", 10)))
+        params = payload.get("params", {})
+        input_size = params.get("input_size")
+        if input_size is not None:
+            self.input_size = (int(input_size[0]), int(input_size[1]))
+        self.input_channels = int(params.get("input_channels", self.input_channels))
+        hidden_channels = params.get("hidden_channels")
+        if hidden_channels is not None:
+            self.hidden_channels = tuple(int(h) for h in hidden_channels)
+
+        num_classes = int(payload.get("num_classes", params.get("num_classes", 10)))
         self._model = self._build_model(num_classes=num_classes)
         self._model.load_state_dict(payload["model_state_dict"])
         self._model.to(self.device)

@@ -1,0 +1,42 @@
+# Chinese-MNIST (Kaggle) preprocessing + SURGE workflow config
+
+conversion:
+  index_csv_path: C:/Users/Bipo1/Downloads/Kaggle Chinese MNIST Data/chinese_mnist.csv
+  images_dir: C:/Users/Bipo1/Downloads/Kaggle Chinese MNIST Data/data/data
+  output_csv_path: data/datasets/chinese_mnist/chinese_mnist_flattened.csv
+  label_column: value
+  filename_template: input_{suite_id}_{sample_id}_{code}.jpg
+  normalize_features: true
+  target_size: [64, 64]
+  feature_prefix: pixel_
+  verbose: true
+
+workflow:
+  dataset_format: csv
+  metadata_overrides:
+    outputs: [value]
+  task_type: classification
+
+  test_fraction: 0.2
+  val_fraction: 0.1
+  standardize_inputs: false
+  standardize_outputs: false
+  seed: 42
+
+  output_dir: .
+  run_tag: chinese_mnist_kaggle
+  overwrite_existing_run: true
+  predictions_format: parquet
+
+  models:
+    - key: pytorch.mnist_cnn
+      name: ChineseMNIST_CNN
+      params:
+        input_size: [64, 64]
+        input_channels: 1
+        hidden_channels: [16, 32]
+        epochs: 10
+        batch_size: 16 #changed from 32 to reduce memory use
+        learning_rate: 0.001
+        device: cpu
+      store_predictions: true

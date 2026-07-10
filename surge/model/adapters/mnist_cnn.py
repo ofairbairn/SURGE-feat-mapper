@@ -12,7 +12,7 @@ _MNIST_PROFILE = ResourceProfile(
     supports_cpu=True,
     supports_gpu=True,
     worker_semantics="none",
-    notes="MNIST-style CNN for 28x28 grayscale classification.",
+    notes="MNIST-style CNN for variable-size image classification (e.g., 28x28, 64x64).",
 )
 
 
@@ -27,6 +27,9 @@ class MNISTCNNAdapter(BaseModelAdapter):
 
     default_params: dict[str, Any] = {
         "num_classes": 10,
+        "input_size": (28, 28),
+        "input_channels": 1,
+        "hidden_channels": (16, 32),
         "epochs": 10,
         "batch_size": 32,
         "learning_rate": 1e-3,

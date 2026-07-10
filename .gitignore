@@ -334,3 +334,6 @@ docs/api_reference/generated/
 # Keeping it ignored is what avoids the CI vs local collision (see
 # commits 6f33d89 and ead0177 for the bug and fix).
 /surge/models/
+
+# Chinese-MNIST Kaggle dataset preprocessing outputs
+data/datasets/chinese_mnist/chinese_mnist_flattened.csv

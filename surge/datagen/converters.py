@@ -478,6 +478,145 @@ def convert_npy_to_format(
     if verbose:
         print(f"Saved {output_path} (format={format})")
     return output_path
+
+
+def convert_chinese_mnist_jpg_index_to_csv(
+    index_csv_path: Union[str, Path],
+    images_dir: Union[str, Path],
+    output_path: Union[str, Path],
+    *,
+    label_column: str = "value",
+    filename_column: Optional[str] = None,
+    filename_template: str = "input_{suite_id}_{sample_id}_{code}.jpg",
+    normalize_features: bool = False,
+    target_size: Optional[tuple[int, int]] = None,
+    feature_prefix: str = "pixel_",
+    verbose: bool = True,
+) -> Path:
+    """Convert Kaggle Chinese-MNIST (index CSV + JPG folder) into a flat CSV.
+
+    The resulting file is a tabular dataset with pixel features and one label
+    column, ready for SURGE workflows.
+
+    Parameters
+    ----------
+    index_csv_path : str or Path
+        Path to ``chinese_mnist.csv``.
+    images_dir : str or Path
+        Directory containing JPG images.
+    output_path : str or Path
+        Destination CSV path.
+    label_column : str, default="value"
+        Label column in the index CSV.
+    filename_column : str, optional
+        If provided and present in CSV, this column is treated as image filename.
+    filename_template : str, default="input_{suite_id}_{sample_id}_{code}.jpg"
+        Template used when ``filename_column`` is not provided.
+    normalize_features : bool, default=False
+        Whether to scale pixel values from [0,255] to [0,1].
+    target_size : tuple[int, int], optional
+        Optional image resize target as ``(width, height)``.
+    feature_prefix : str, default="pixel_"
+        Prefix for flattened pixel columns.
+    verbose : bool, default=True
+        Whether to print progress.
+
+    Returns
+    -------
+    Path
+        Path to generated CSV.
+    """
+    index_csv_path = Path(index_csv_path)
+    images_dir = Path(images_dir)
+    output_path = Path(output_path)
+
+    if not index_csv_path.exists():
+        raise FileNotFoundError(f"Index CSV not found: {index_csv_path}")
+    if not images_dir.exists():
+        raise FileNotFoundError(f"Images directory not found: {images_dir}")
+
+    try:
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError(
+            "Pillow is required to read JPG images. Install with: pip install pillow"
+        ) from exc
+
+    if verbose:
+        print(f"Loading index CSV: {index_csv_path}")
+    index_df = pd.read_csv(index_csv_path)
+
+    if label_column not in index_df.columns:
+        raise ValueError(
+            f"label_column '{label_column}' not found in index CSV columns: {list(index_df.columns)}"
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    filenames: list[str] = []
+    if filename_column and filename_column in index_df.columns:
+        filenames = [str(v) for v in index_df[filename_column].tolist()]
+    else:
+        for _, row in index_df.iterrows():
+            try:
+                filenames.append(filename_template.format(**row.to_dict()))
+            except KeyError as exc:
+                raise ValueError(
+                    "filename_template references a missing CSV column: "
+                    f"{exc}. Available columns: {list(index_df.columns)}"
+                ) from exc
+
+    flat_rows: list[np.ndarray] = []
+    missing: list[str] = []
+    expected_dim: Optional[int] = None
+
+    for name in filenames:
+        img_path = images_dir / name
+        if not img_path.exists():
+            missing.append(str(img_path))
+            continue
+
+        with Image.open(img_path) as im:
+            gray = im.convert("L")
+            if target_size is not None:
+                gray = gray.resize(target_size, Image.BILINEAR)
+            arr = np.asarray(gray, dtype=np.float32)
+
+        flat = arr.reshape(-1)
+        if expected_dim is None:
+            expected_dim = int(flat.shape[0])
+        elif expected_dim != int(flat.shape[0]):
+            raise ValueError(
+                f"Inconsistent image size detected. Expected flattened length {expected_dim}, "
+                f"got {flat.shape[0]} for {img_path}."
+            )
+
+        if normalize_features:
+            flat = flat / 255.0
+
+        flat_rows.append(flat)
+
+    if missing:
+        preview = "\n".join(missing[:5])
+        raise FileNotFoundError(
+            f"Missing {len(missing)} image files referenced by index CSV. "
+            f"First missing entries:\n{preview}"
+        )
+
+    if not flat_rows:
+        raise ValueError("No images were loaded; check images_dir and index CSV mapping.")
+
+    X = np.stack(flat_rows, axis=0)
+    feature_names = [f"{feature_prefix}{i}" for i in range(X.shape[1])]
+    out_df = pd.DataFrame(X, columns=feature_names)
+    out_df[label_column] = index_df[label_column].to_numpy()
+
+    if verbose:
+        print(f"Writing CSV: {output_path}")
+        print(f"Rows: {out_df.shape[0]}, Features: {X.shape[1]}, Label: {label_column}")
+
+    out_df.to_csv(output_path, index=False)
+    return output_path
 ###### EXAMPLE USE OF convert_npy_to_format #######
 # # CSV (flatten images)
 # convert_npy_to_format(
@@ -499,4 +638,5 @@ __all__ = [
     "convert_mnist_npy_to_csv",
     "convert_mnist_npy_to_parquet",
     "convert_npy_to_csv",
+    "convert_chinese_mnist_jpg_index_to_csv",
 ]
