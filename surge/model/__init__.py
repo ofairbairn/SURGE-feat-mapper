@@ -20,7 +20,7 @@ from .sklearn import (
 )
 from .pytorch import PYTORCH_AVAILABLE, PyTorchMLPAdapter
 from .gpflow import GPflowGPRAdapter, GPflowMultiKernelAdapter
-from .mnist_test_cnn import MNISTCNNAdapter
+from .adapters.mnist_cnn import MNISTCNNAdapter
 from .gpflow import GPFLOW_AVAILABLE, GPflowGPRAdapter, GPflowMultiKernelAdapter
 from .ensembles import EnsemblePrediction, FNNEnsemble
 from .registry import MODEL_REGISTRY, create_model, list_models, register_model

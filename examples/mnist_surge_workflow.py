@@ -1,59 +1,45 @@
-"""Toy SURGE workflow example for the MNIST CNN adapter.
+"""Run the MNIST SURGE workflow from a YAML config.
 
-This script:
-1. Loads MNIST .npy files from disk.
-2. Flattens each image to 784 pixels.
-3. Writes a CSV file with one row per image and a label column.
-4. Builds a SurrogateWorkflowSpec for the registered model key ``pytorch.mnist_cnn``.
-5. Runs the SURGE workflow end to end.
+The config keeps the data locations and workflow parameters in one place, while
+this runner materializes the CSV and fills in the feature/target metadata.
 """
+
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
+import yaml
 
+import surge  # noqa: F401 - trigger model registration
+from surge.viz import viz_run
 from surge.workflow.run import run_surrogate_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 
-DATA_DIR = Path(r"C:\Users\Bipo1\Downloads\MNIST Data")
-CSV_OUT = Path("runs/mnist/mnist.csv")
+DEFAULT_CONFIG = Path("examples/configs/mnist_surge_workflow.yaml")
 
 
-def build_mnist_csv(
-    *,
-    n_train: Optional[int] = None,
-    n_test: Optional[int] = None,
-    output_path: Path = CSV_OUT,
-) -> Path:
-    """Create a CSV dataset from the real MNIST .npy files for SURGE."""
-    x_train = np.load(DATA_DIR / "mnist_train_features.npy")
-    y_train = np.load(DATA_DIR / "mnist_train_targets.npy")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the SURGE MNIST workflow.")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to the YAML config.")
+    return parser.parse_args()
 
-    x_test = np.load(DATA_DIR / "mnist_test_features.npy")
-    y_test = np.load(DATA_DIR / "mnist_test_targets.npy")
 
-    # Flatten each 28x28 image into 784 pixel columns.
-    x_train = x_train.reshape(-1, 28 * 28).astype(np.float32)
-    y_train = y_train.astype(np.int64)
+def _load_array(path: str | Path) -> np.ndarray:
+    return np.load(Path(path))
 
-    x_test = x_test.reshape(-1, 28 * 28).astype(np.float32)
-    y_test = y_test.astype(np.int64)
 
-    if n_train is not None:
-        x_train = x_train[:n_train]
-        y_train = y_train[:n_train]
-    if n_test is not None:
-        x_test = x_test[:n_test]
-        y_test = y_test[:n_test]
+def build_mnist_csv(*, data_cfg: dict[str, str], output_path: Path) -> tuple[Path, list[str]]:
+    x_train = _load_array(data_cfg["train_features"]).reshape(-1, 28 * 28).astype(np.float32)
+    y_train = _load_array(data_cfg["train_targets"]).reshape(-1).astype(np.int64)
+    x_test = _load_array(data_cfg["test_features"]).reshape(-1, 28 * 28).astype(np.float32)
+    y_test = _load_array(data_cfg["test_targets"]).reshape(-1).astype(np.int64)
 
     pixel_cols = [f"pixel_{i}" for i in range(x_train.shape[1])]
-
     train_df = pd.DataFrame(x_train, columns=pixel_cols)
     train_df["label"] = y_train
-
     test_df = pd.DataFrame(x_test, columns=pixel_cols)
     test_df["label"] = y_test
 
@@ -61,43 +47,38 @@ def build_mnist_csv(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     combined.to_csv(output_path, index=False)
     print(f"Wrote MNIST CSV to {output_path}")
-    return output_path
+    return output_path, pixel_cols
 
 
-def main() -> None:
-    csv_path = build_mnist_csv()
+def main() -> int:
+    args = parse_args()
+    config_path = args.config.resolve()
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
-    # SURGE needs to know which columns are inputs and which are outputs.
-    # The pixel columns are the features, and the label column is the target.
-    pixel_cols = [f"pixel_{i}" for i in range(28 * 28)]
+    data_cfg = dict(payload["data"])
+    workflow_cfg = dict(payload["workflow"])
+    csv_out = Path(data_cfg.get("csv_out", "runs/mnist/mnist.csv"))
+    csv_path, pixel_cols = build_mnist_csv(data_cfg=data_cfg, output_path=csv_out)
 
-    spec = SurrogateWorkflowSpec(
-        dataset_path=str(csv_path),
-        dataset_format="csv",
-        metadata_overrides={"inputs": pixel_cols, "outputs": ["label"]},
-        models=[
-            {
-                "key": "pytorch.mnist_cnn",
-                "params": {
-                    "epochs": 10,
-                    "batch_size": 32,
-                    "learning_rate": 1e-3,
-                    "device": "cpu",
-                },
-            }
-        ],
-        output_dir="runs/mnist",
-        run_tag="mnist",
-        overwrite_existing_run=True,
-        test_fraction=0.2,
-        val_fraction=0.1,
-        task_type="classification",
-    )
+    workflow_cfg["dataset_path"] = str(csv_path)
+    workflow_cfg["dataset_format"] = "csv"
+    workflow_cfg["metadata_overrides"] = {"inputs": pixel_cols, "outputs": ["label"]}
 
-    summary = run_surrogate_workflow(spec)
-    print("SURGE workflow completed.")
-    print(summary["models"][0]["metrics"])
+    spec = SurrogateWorkflowSpec.from_dict(workflow_cfg)
+    summary = run_surrogate_workflow(spec, invocation={"script": str(Path(__file__).resolve())})
+
+    print("Workflow complete.")
+    for model in summary.get("models", []):
+        print(f"{model.get('name', model.get('key'))}: {model.get('metrics', {})}")
+
+    run_root = summary.get("artifacts", {}).get("root")
+    if run_root:
+        viz_result = viz_run(Path(run_root))
+        print("Visualization complete.")
+        for path in viz_result.get("saved_paths", []):
+            print(path)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
