@@ -1,0 +1,46 @@
+# UCI wine quality: RandomForest classifier + VAE classification workflow
+
+dataset_path: data/datasets/uci_wine/wine_quality_combined.csv
+dataset_format: csv
+
+metadata_overrides:
+  outputs: ["quality_label"]
+
+task_type: classification
+
+test_fraction: 0.2
+val_fraction: 0.1
+
+standardize_inputs: true
+standardize_outputs: false
+
+seed: 42
+
+output_dir: runs/uci_wine
+run_tag: wine_rf_vae
+overwrite_existing_run: true
+predictions_format: parquet
+
+models:
+  - key: sklearn.random_forest_classifier
+    name: Wine_RF_Classifier
+    params:
+      n_estimators: 400
+      max_depth: 20
+      random_state: 42
+      n_jobs: -1
+    store_predictions: true
+
+  - key: pytorch.vae
+    name: Wine_VAE
+    params:
+      task: classification
+      latent_dim: 8
+      hidden_dim: 128
+      beta: 1.0
+      n_epochs: 120
+      batch_size: 64
+      learning_rate: 0.001
+      patience: 15
+      random_state: 42
+    store_predictions: true
