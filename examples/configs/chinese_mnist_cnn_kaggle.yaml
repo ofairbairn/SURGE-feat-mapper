@@ -1,17 +1,19 @@
 # Chinese-MNIST (Kaggle) preprocessing + SURGE workflow config
 
-conversion:
-  index_csv_path: C:/Users/Bipo1/Downloads/Kaggle Chinese MNIST Data/chinese_mnist.csv
-  images_dir: C:/Users/Bipo1/Downloads/Kaggle Chinese MNIST Data/data/data
-  output_csv_path: data/datasets/chinese_mnist/chinese_mnist_flattened.csv
-  label_column: value
-  filename_template: input_{suite_id}_{sample_id}_{code}.jpg
-  normalize_features: true
-  target_size: [64, 64]
-  feature_prefix: pixel_
-  verbose: true
+# No longer needed BECAUSE I already converted the dataset to flattened csv
+# conversion:
+#   index_csv_path: C:/Users/Bipo1/Downloads/Kaggle Chinese MNIST Data/chinese_mnist.csv
+#   images_dir: C:/Users/Bipo1/Downloads/Kaggle Chinese MNIST Data/data/data
+#   output_csv_path: C:/Users/Bipo1/Downloads/Kaggle Chinese MNIST Data/chinese_mnist_flattened.csv
+#   label_column: value
+#   filename_template: input_{suite_id}_{sample_id}_{code}.jpg
+#   normalize_features: true
+#   target_size: [64, 64]
+#   feature_prefix: pixel_
+#   verbose: true
 
 workflow:
+  dataset_path: C:/Users/Bipo1/Downloads/Kaggle Chinese MNIST Data/chinese_mnist_flattened.csv #comment out this line if using conversion block
   dataset_format: csv
   metadata_overrides:
     outputs: [value]
