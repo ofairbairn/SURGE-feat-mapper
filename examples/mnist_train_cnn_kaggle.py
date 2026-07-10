@@ -13,20 +13,21 @@ from surge.viz import viz_run
 from surge.workflow.run import run_surrogate_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 
+# replaced this line
+DEFAULT_CONFIG = Path("examples/configs/mnist_train_cnn_kaggle.yaml")
+# def _default_config_path() -> Path:
+# 	"""Prefer .yml when both exist, then fall back to .yaml for compatibility."""
+# 	candidates = [
+# 		Path("examples/configs/mnist_train_cnn_kaggle.yml"),
+# 		Path("examples/configs/mnist_train_cnn_kaggle.yaml"),
+# 	]
+# 	for path in candidates:
+# 		if path.exists():
+# 			return path
+# 	return candidates[0]
 
-def _default_config_path() -> Path:
-	"""Prefer .yml when both exist, then fall back to .yaml for compatibility."""
-	candidates = [
-		Path("examples/configs/mnist_train_cnn_kaggle.yml"),
-		Path("examples/configs/mnist_train_cnn_kaggle.yaml"),
-	]
-	for path in candidates:
-		if path.exists():
-			return path
-	return candidates[0]
 
-
-DEFAULT_CONFIG = _default_config_path()
+# DEFAULT_CONFIG = _default_config_path()
 
 
 def parse_args() -> argparse.Namespace:
