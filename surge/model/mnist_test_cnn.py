@@ -61,7 +61,6 @@ class MNISTCNNAdapter(BaseModelAdapter):
             raise ImportError("PyTorch is required for MNISTCNNAdapter. Install torch first.")
         super().__init__(**kwargs)
         self._model = None
-        self.training_history: list = []  # Initialize training history tracker
 
     def _build_model(self, **kwargs: Any) -> Any: # CNN CREATED HERE at _build_model
         num_classes = int(kwargs.get("num_classes", kwargs.get("n_classes", 10)))
@@ -135,7 +134,7 @@ class MNISTCNNAdapter(BaseModelAdapter):
 
         best_state = None
         best_val_loss = float("inf")
-        self.training_history = []  # Reset training history for this fit
+        self._model.training_history = []
         self._model.train()
         for epoch in range(epochs):
             epoch_train_loss = 0.0
@@ -178,7 +177,7 @@ class MNISTCNNAdapter(BaseModelAdapter):
 
             # record epoch history for plotting/inspection
             entry = {"epoch": epoch + 1, "train_loss": avg_train_loss, "val_accuracy": val_accuracy, "val_loss": val_loss}
-            self.training_history.append(entry)
+            self._model.training_history.append(entry)
 
         if best_state is not None:
             self._model.load_state_dict(best_state)

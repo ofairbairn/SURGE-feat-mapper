@@ -47,7 +47,16 @@ class CNN1DAdapter(BaseModelAdapter):
         params.update(kwargs)
         return CNN1DModel(**params)
 
-    def fit(self, X: Any, y: Any, X_val: Any = None, y_val: Any = None) -> None:
+    def fit(
+        self,
+        X: Any,
+        y: Any,
+        X_val: Any = None,
+        y_val: Any = None,
+        finetune: bool = False,
+        **_: Any,
+    ) -> None:
+        del finetune
         self._model.fit(X, y, X_val, y_val)
 
     def predict(self, X: Any) -> Any:

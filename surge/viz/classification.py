@@ -42,6 +42,18 @@ def _save_figure(fig: Any, save_path: Path | None) -> None:
     plt.close(fig)
 
 
+def _resolve_classes(y_true: np.ndarray, y_prob: np.ndarray | None = None) -> np.ndarray:
+    classes = np.unique(y_true)
+    if y_prob is not None and y_prob.ndim == 2:
+        n_classes = y_prob.shape[1]
+        if classes.size != n_classes and np.issubdtype(classes.dtype, np.integer):
+            min_class = int(classes.min())
+            max_class = int(classes.max())
+            if max_class - min_class + 1 == n_classes:
+                classes = np.arange(min_class, min_class + n_classes)
+    return classes
+
+
 def plot_roc_curve(
     y_true,
     y_prob,
@@ -58,6 +70,7 @@ def plot_roc_curve(
 
     y_true = np.asarray(y_true)
     y_prob = np.asarray(y_prob, dtype=float)
+    classes = _resolve_classes(y_true, y_prob)
     if ax is None:
         fig, ax = plt.subplots(figsize=(6, 5.5))
     else:
@@ -69,24 +82,27 @@ def plot_roc_curve(
             y_true,
             y_score,
             ax=ax,
-            name=labels[1] if labels and len(labels) > 1 else "pos",
+            pos_label=classes[-1],
+            name=labels[1] if labels and len(labels) > 1 else str(classes[-1]),
         )
     elif y_prob.ndim == 1:
         RocCurveDisplay.from_predictions(
             y_true,
             y_prob,
             ax=ax,
-            name=labels[1] if labels and len(labels) > 1 else None,
+            pos_label=classes[-1],
+            name=labels[1] if labels and len(labels) > 1 else str(classes[-1]),
         )
     else:
-        n_classes = y_prob.shape[1]
-        yb = label_binarize(y_true, classes=np.arange(n_classes))
-        for c in range(n_classes):
+        yb = label_binarize(y_true, classes=classes)
+        for c, class_label in enumerate(classes):
+            if yb[:, c].sum() == 0:
+                continue
             RocCurveDisplay.from_predictions(
                 yb[:, c],
                 y_prob[:, c],
                 ax=ax,
-                name=labels[c] if labels and c < len(labels) else f"class_{c}",
+                name=labels[c] if labels and c < len(labels) else str(class_label),
             )
     ax.plot([0, 1], [0, 1], "k--", alpha=0.4, label="chance")
     ax.set_title(title)
@@ -110,29 +126,33 @@ def plot_precision_recall_curve(
 
     y_true = np.asarray(y_true)
     y_prob = np.asarray(y_prob, dtype=float)
+    classes = _resolve_classes(y_true, y_prob)
     if ax is None:
         fig, ax = plt.subplots(figsize=(6, 5.5))
     else:
         fig = ax.figure
 
     if y_prob.ndim == 1:
-        ap = average_precision_score(y_true, y_prob)
+        ap = average_precision_score(y_true, y_prob, pos_label=classes[-1])
         PrecisionRecallDisplay.from_predictions(
-            y_true, y_prob, ax=ax, name=f"AP={ap:.3f}"
+            y_true, y_prob, ax=ax, pos_label=classes[-1], name=f"AP={ap:.3f}"
         )
     else:
-        n_classes = y_prob.shape[1]
-        if n_classes == 2:
-            PrecisionRecallDisplay.from_predictions(y_true, y_prob[:, 1], ax=ax)
+        if y_prob.shape[1] == 2:
+            PrecisionRecallDisplay.from_predictions(
+                y_true, y_prob[:, 1], ax=ax, pos_label=classes[-1]
+            )
         else:
-            yb = label_binarize(y_true, classes=np.arange(n_classes))
-            for c in range(n_classes):
+            yb = label_binarize(y_true, classes=classes)
+            for c, class_label in enumerate(classes):
+                if yb[:, c].sum() == 0:
+                    continue
                 ap = average_precision_score(yb[:, c], y_prob[:, c])
                 PrecisionRecallDisplay.from_predictions(
                     yb[:, c],
                     y_prob[:, c],
                     ax=ax,
-                    name=(labels[c] if labels and c < len(labels) else f"c{c}") + f" AP={ap:.2f}",
+                    name=(labels[c] if labels and c < len(labels) else str(class_label)) + f" AP={ap:.2f}",
                 )
     ax.set_title(title)
     ax.legend(loc="best", fontsize=8)

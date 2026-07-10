@@ -269,6 +269,12 @@ class SurrogateEngine:
         cfg = self.config
         test_fraction = max(0.0, min(0.9, cfg.test_fraction))
         val_fraction = max(0.0, min(0.9, cfg.val_fraction))
+        stratify_y = None
+        if cfg.task_type == "classification":
+            if y.ndim == 2 and y.shape[1] == 1:
+                stratify_y = y[:, 0]
+            elif y.ndim == 1:
+                stratify_y = y
 
         if test_fraction > 0:
             (
@@ -285,6 +291,7 @@ class SurrogateEngine:
                 test_size=test_fraction,
                 random_state=cfg.random_state,
                 shuffle=cfg.shuffle,
+                stratify=stratify_y,
             )
         else:
             X_train_val, y_train_val = X, y
@@ -312,6 +319,11 @@ class SurrogateEngine:
                 test_size=relative_val,
                 random_state=cfg.random_state,
                 shuffle=cfg.shuffle,
+                stratify=(
+                    y_train_val[:, 0]
+                    if cfg.task_type == "classification" and y_train_val.ndim == 2 and y_train_val.shape[1] == 1
+                    else (y_train_val if cfg.task_type == "classification" and y_train_val.ndim == 1 else None)
+                ),
             )
         else:
             X_train, y_train = X_train_val, y_train_val
