@@ -38,6 +38,6 @@ workflow:
         hidden_channels: [16, 32]
         epochs: 12
         batch_size: 32
-        learning_rate: 0.0001
+        learning_rate: 0.001
         device: cpu
       store_predictions: true

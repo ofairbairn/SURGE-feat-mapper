@@ -1,1 +1,43 @@
-# SURGE workflow Configuration for Kaggle Fashion MNIST Classification
+# Fashion-MNIST (Kaggle): optional preprocessing + SURGE workflow config
+
+# Enable this block only if your Fashion-MNIST data is split into .npy arrays.
+# If you already have a flat CSV with label + pixel columns, keep this commented
+# and set workflow.dataset_path below.
+# conversion:
+#   features_path: C:/Users/Bipo1/Downloads/Fashion MNIST Data/fashion_mnist_train_features.npy
+#   targets_path: C:/Users/Bipo1/Downloads/Fashion MNIST Data/fashion_mnist_train_targets.npy
+#   output_csv_path: C:/Users/Bipo1/Downloads/Fashion MNIST Data/fashion_mnist_train_flattened.csv
+#   target_name: label
+#   normalize_features: true
+#   verbose: true
+
+workflow:
+  dataset_path: C:/Users/Bipo1/Downloads/Kaggle Fashion MNIST Data/fashion-mnist_train.csv
+  dataset_format: auto
+  metadata_overrides:
+    outputs: [label]
+  task_type: classification
+
+  test_fraction: 0.2
+  val_fraction: 0.1
+  standardize_inputs: false
+  standardize_outputs: false
+  seed: 42
+
+  output_dir: runs/fashion_mnist
+  run_tag: fashion_mnist_cnn_kaggle
+  overwrite_existing_run: true
+  predictions_format: parquet
+
+  models:
+    - key: pytorch.mnist_cnn
+      name: FashionMNIST_CNN
+      params:
+        input_size: [28, 28]
+        input_channels: 1
+        hidden_channels: [16, 32]
+        epochs: 12
+        batch_size: 32
+        learning_rate: 0.001
+        device: cpu
+      store_predictions: true
