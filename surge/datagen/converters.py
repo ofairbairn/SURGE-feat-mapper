@@ -5,7 +5,7 @@ This module provides utilities to convert between different data formats
 (e.g., .npy to .csv/.parquet) for compatibility with SURGE workflows.
 
 Example:
-    Convert MNIST .npy files to CSV format::
+    Convert MNIST .npy files to CSV format:
 
         from surge.datagen.converters import convert_mnist_npy_to_csv
 
@@ -22,6 +22,20 @@ Example:
             targets_path="mnist_test_targets.npy",
             output_path="mnist_test.csv"
         )
+
+Example:
+    Convert .csv delimiter from semicolon ; to comma ,
+    from surge.datagen.converters import convert_csv_delimiter
+convert_csv_delimiter(
+
+    r"C:\Users\Bipo1\Downloads\UCI Wine Data\winequality-red.csv",
+    r"C:\Users\Bipo1\Downloads\UCI Wine Data\winequality-red-comma.csv",
+)
+
+convert_csv_delimiter(
+    r"C:\Users\Bipo1\Downloads\UCI Wine Data\winequality-white.csv",
+    r"C:\Users\Bipo1\Downloads\UCI Wine Data\winequality-white-comma.csv",
+)
 """
 
 from pathlib import Path
