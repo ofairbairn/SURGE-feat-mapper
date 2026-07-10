@@ -28,13 +28,13 @@ Example:
     from surge.datagen.converters import convert_csv_delimiter
 convert_csv_delimiter(
 
-    r"C:\Users\Bipo1\Downloads\UCI Wine Data\winequality-red.csv",
-    r"C:\Users\Bipo1\Downloads\UCI Wine Data\winequality-red-comma.csv",
+    r"C:\\Users\\Bipo1\\Downloads\\UCI Wine Data\\winequality-red.csv",
+    r"C:\\Users\\Bipo1\\Downloads\\UCI Wine Data\\winequality-red-comma.csv",
 )
 
 convert_csv_delimiter(
-    r"C:\Users\Bipo1\Downloads\UCI Wine Data\winequality-white.csv",
-    r"C:\Users\Bipo1\Downloads\UCI Wine Data\winequality-white-comma.csv",
+    r"C:\\Users\\Bipo1\\Downloads\\UCI Wine Data\\winequality-white.csv",
+    r"C:\\Users\\Bipo1\\Downloads\\UCI Wine Data\\winequality-white-comma.csv",
 )
 """
 
