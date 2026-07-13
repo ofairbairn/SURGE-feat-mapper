@@ -14,6 +14,14 @@ import numpy as np
 from sklearn.preprocessing import LabelEncoder
 
 try:
+    from tqdm.auto import trange
+
+    TQDM_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    trange = None  # type: ignore[assignment]
+    TQDM_AVAILABLE = False
+
+try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
@@ -170,12 +178,14 @@ class MNISTCNNModel:
             y_val_encoded = None
 
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(
+        optimizer = optim.AdamW( #switched optimizer to adamw for weight decay of 0.01
             self._model.parameters(),
             lr=float(kwargs.get("learning_rate", self.learning_rate)),
+            weight_decay=0.01,
         )
         batch_size = int(kwargs.get("batch_size", self.batch_size))
         epochs = int(kwargs.get("epochs", self.epochs))
+        show_progress = bool(kwargs.get("show_progress", self.verbose))
 
         X_tensor = self._prepare_features(X).to(self.device)
         y_tensor = torch.from_numpy(np.asarray(y_encoded, dtype=np.int64)).to(self.device)
@@ -194,7 +204,12 @@ class MNISTCNNModel:
         best_val_loss = float("inf")
         self.training_history = []
         self._model.train()
-        for epoch in range(epochs):
+        epoch_iterator = (
+            trange(epochs, desc="MNISTCNN Training", unit="epoch", disable=not show_progress)
+            if show_progress and TQDM_AVAILABLE
+            else range(epochs)
+        )
+        for epoch in epoch_iterator:
             epoch_train_loss = 0.0
             train_count = 0
             self._model.train()
@@ -241,6 +256,14 @@ class MNISTCNNModel:
                     "val_loss": val_loss,
                 }
             )
+
+            if show_progress and TQDM_AVAILABLE and hasattr(epoch_iterator, "set_postfix"):
+                progress_metrics = {"train_loss": f"{avg_train_loss:.4f}"}
+                if val_loss is not None:
+                    progress_metrics["val_loss"] = f"{val_loss:.4f}"
+                if val_accuracy is not None:
+                    progress_metrics["val_acc"] = f"{val_accuracy * 100:.2f}%"
+                epoch_iterator.set_postfix(progress_metrics)
 
         if best_state is not None:
             self._model.load_state_dict(best_state)
