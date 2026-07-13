@@ -146,7 +146,7 @@ def plot_training_dashboard(
     model_name: str = "",
     save_path: Path | str | None = None,
 ) -> Any:
-    """Two-panel dashboard for classification runs: train loss and validation accuracy."""
+    """Two-panel dashboard: train loss plus best available validation metric."""
     if not MPL_AVAILABLE:
         raise ImportError("matplotlib is required for plot_training_dashboard")
     hist = load_training_history(history)
@@ -174,23 +174,42 @@ def plot_training_dashboard(
         prefix = [float(values[0])] * (width - 1)
         return prefix + smoothed.astype(float).tolist()
 
-    axes[0].plot(epochs, train_loss, label="train_loss", color="C0", alpha=0.35, linewidth=1.0)
-    axes[0].plot(epochs, _rolling_mean(train_loss), label="train_loss_rolling_mean", color="C0", linewidth=2.0)
+    axes[0].plot(epochs, train_loss, label="train_loss", color="cornflowerblue", linewidth=1.0)
+    axes[0].plot(epochs, _rolling_mean(train_loss), label="train_loss_rolling_mean", color="indianred", linewidth=2.0)
     axes[0].set_ylabel("loss")
     axes[0].legend(loc="best")
     axes[0].grid(True, alpha=0.3)
 
-    val_accuracy = [h.get("val_accuracy") for h in hist]
-    if any(v is not None for v in val_accuracy):
+    # Prefer explicit validation accuracy when present, otherwise fall back to
+    # validation loss/other common validation metrics used by regression and
+    # unsupervised models.
+    preferred_metrics = (
+        "val_accuracy",
+        "validation_accuracy",
+        "val_loss",
+        "val_rmse",
+        "val_mae",
+    )
+    metric_name = None
+    metric_values = None
+    for candidate in preferred_metrics:
+        values = [h.get(candidate) for h in hist]
+        if any(v is not None for v in values):
+            metric_name = candidate
+            metric_values = values
+            break
+
+    if metric_name is not None and metric_values is not None:
         axes[1].plot(
             epochs,
-            [float(v) if v is not None else np.nan for v in val_accuracy],
-            label="val_accuracy",
-            color="C1",
+            [float(v) if v is not None else np.nan for v in metric_values],
+            label=metric_name,
+            color="goldenrod",
             linewidth=2.0,
         )
-        axes[1].set_ylabel("validation accuracy")
-        axes[1].set_ylim(0.0, 1.0)
+        axes[1].set_ylabel(metric_name.replace("_", " "))
+        if metric_name in {"val_accuracy", "validation_accuracy"}:
+            axes[1].set_ylim(0.0, 1.0)
         axes[1].legend(loc="best")
     else:
         axes[1].text(0.5, 0.5, "No val metric in history", ha="center", va="center")
