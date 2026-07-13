@@ -174,7 +174,7 @@ def plot_training_dashboard(
         prefix = [float(values[0])] * (width - 1)
         return prefix + smoothed.astype(float).tolist()
 
-    axes[0].plot(epochs, train_loss, label="train_loss", color="cornflowerblue", linewidth=1.0)
+    axes[0].plot(epochs, train_loss, label="train_loss", color="cornflowerblue", linewidth=2.0)
     axes[0].plot(epochs, _rolling_mean(train_loss), label="train_loss_rolling_mean", color="indianred", linewidth=2.0)
     axes[0].set_ylabel("loss")
     axes[0].legend(loc="best")

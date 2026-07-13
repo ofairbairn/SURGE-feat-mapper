@@ -141,7 +141,7 @@ class VAEModel:
         self._class_labels: Optional[np.ndarray] = None
         self.training_history: list[dict] = []
 
-    def fit(self, X, y, **_: Any) -> "VAEModel":
+    def fit(self, X, y, X_val=None, y_val=None, **_: Any) -> "VAEModel":
         torch.manual_seed(self.random_state)
         np.random.seed(self.random_state)
 
@@ -177,6 +177,30 @@ class VAEModel:
         else:
             yt = torch.from_numpy(ys.astype(np.int64))
 
+        Xv_t = None
+        yv_t = None
+        if X_val is not None and y_val is not None:
+            Xv_arr = np.asarray(X_val, dtype=np.float64)
+            yv_arr = np.asarray(y_val, dtype=np.float64)
+            if yv_arr.ndim == 1:
+                yv_arr = yv_arr[:, None]
+
+            Xv_scaled = self.scaler_X.transform(Xv_arr)
+            Xv_t = torch.from_numpy(Xv_scaled.astype(np.float32)).to(self.device)
+
+            if self.task == "regression":
+                yv_scaled = self.scaler_y.transform(yv_arr)
+                yv_t = torch.from_numpy(yv_scaled.astype(np.float32)).to(self.device)
+            else:
+                labels_v = np.asarray(yv_arr).reshape(-1)
+                if np.all(np.isfinite(labels_v)) and np.allclose(labels_v, np.round(labels_v)):
+                    labels_v = labels_v.astype(np.int64)
+                class_to_index = {
+                    label: idx for idx, label in enumerate(self._class_labels or np.array([]))
+                }
+                yv_encoded = np.asarray([class_to_index[label] for label in labels_v], dtype=np.int64)
+                yv_t = torch.from_numpy(yv_encoded).to(self.device)
+
         # Cap batch size to at most 10% of training data so small datasets
         # (e.g. diabetes, n=309 train) get enough gradient steps per epoch.
         eff_bs = min(self.batch_size, max(32, len(Xt) // 10))
@@ -211,7 +235,20 @@ class VAEModel:
                 optimizer.step()
                 eloss += loss.item() * len(xb)
             epoch_loss = eloss / n
-            self.training_history.append({"epoch": epoch + 1, "train_loss": epoch_loss})
+
+            record = {"epoch": epoch + 1, "train_loss": epoch_loss}
+            if Xv_t is not None and yv_t is not None:
+                self._net.eval()
+                with torch.no_grad():
+                    y_hat_v, x_hat_v, mu_v, logvar_v = self._net(Xv_t)
+                    rl_v = recon_loss(x_hat_v, Xv_t) / (len(Xv_t) * Xv_t.shape[1])
+                    kl_v = -0.5 * torch.mean(1 + logvar_v - mu_v.pow(2) - logvar_v.exp())
+                    tl_v = task_loss_fn(y_hat_v, yv_t)
+                    val_loss = float((rl_v + self.beta * kl_v + self.regression_weight * tl_v).item())
+                record["val_loss"] = val_loss
+                self._net.train()
+
+            self.training_history.append(record)
             if epoch_loss < best_loss:
                 best_loss = epoch_loss
                 no_improve = 0

@@ -84,8 +84,15 @@ class VAEAdapter(BaseModelAdapter):
         params.update(kwargs)
         return mod.VAEModel(**params)
 
-    def fit(self, X: Any, y: Any, **_: Any) -> None:
-        self._model.fit(X, y)
+    def fit(
+        self,
+        X: Any,
+        y: Any,
+        X_val: Any = None,
+        y_val: Any = None,
+        **_: Any,
+    ) -> None:
+        self._model.fit(X, y, X_val=X_val, y_val=y_val)
 
     def predict(self, X: Any) -> Any:
         return self._model.predict(X)
