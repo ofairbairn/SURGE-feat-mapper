@@ -9,6 +9,7 @@ import yaml
 
 import surge  # noqa: F401 - ensure adapters are registered
 from surge.datagen.converters import convert_mnist_npy_to_csv
+from surge.viz import viz_run
 from surge.workflow.run import run_surrogate_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 
@@ -25,11 +26,6 @@ def parse_args() -> argparse.Namespace:
 		type=Path,
 		default=DEFAULT_CONFIG,
 		help="Path to YAML config.",
-	)
-	parser.add_argument(
-		"--viz",
-		action="store_true",
-		help="Generate plots after the workflow run (disabled by default).",
 	)
 	return parser.parse_args()
 
@@ -67,9 +63,7 @@ def main() -> int:
 		print(f"{model.get('name', model.get('key'))}: {model.get('metrics', {})}")
 
 	run_root = summary.get("artifacts", {}).get("root")
-	if run_root and args.viz:
-		from surge.viz import viz_run
-
+	if run_root:
 		viz_result = viz_run(Path(run_root))
 		print("Visualization complete.")
 		for path in viz_result.get("saved_paths", []):
