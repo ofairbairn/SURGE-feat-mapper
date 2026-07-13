@@ -209,6 +209,15 @@ except Exception:
     pass
 
 try:
+    from .adapters.owen_vae import OwenVAEAdapter
+    from .pytorch import PYTORCH_AVAILABLE as _PTA_OWEN_VAE
+
+    if _PTA_OWEN_VAE:
+        register_model(OwenVAEAdapter, key='pytorch.owen_vae', aliases=['owen_vae'])
+except Exception:
+    pass
+
+try:
     from .adapters.fno2d import FNO2dAdapter
     from .pytorch import PYTORCH_AVAILABLE as _PTA13
 

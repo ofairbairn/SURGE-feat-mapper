@@ -365,10 +365,11 @@ class SurrogateDataset:
         if self.df is None:
             raise ValueError("Dataset not loaded.")
         analyzer_kwargs = analyzer_kwargs or {}
+        hints = analyzer_kwargs.pop("hints", None)
         self.analysis = analyze_dataset_structure(
             self.df,
             metadata=self.metadata,
-            hints=analyzer_kwargs.pop("hints", None),
+            hints=hints,
             sample_size_for_stats=analyzer_kwargs.pop("sample_size_for_stats", None),
         )
         self.input_columns = self.analysis["input_variables"]
@@ -386,6 +387,10 @@ class SurrogateDataset:
             self.output_columns = [
                 col for col in manual_outputs if col in self.df.columns
             ]
+
+        task_type = str((hints or {}).get("task_type", "")).strip().lower()
+        if task_type == "unsupervised" and not manual_outputs:
+            self.output_columns = list(self.input_columns)
 
     def _read_file(self, path: Path, *, format: str, **reader_kwargs: Any) -> pd.DataFrame:
         fmt = (format or "").lower()

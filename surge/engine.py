@@ -44,7 +44,7 @@ class EngineRunConfig:
     shuffle: bool = True
     random_state: Optional[int] = 42
     metrics: Tuple[str, ...] = ("r2", "rmse", "mae", "mape")
-    # "regression" or "classification" — affects which metric set is computed
+    # "regression", "classification", or "unsupervised" — affects splits/metrics
     task_type: str = "regression"
     # Declarative compute request propagated into every model trained by
     # this engine (device, num_workers, strict policy). See
@@ -681,6 +681,15 @@ class SurrogateEngine:
         y_true = np.asarray(y_true)
         y_pred = np.asarray(y_pred)
         metrics: Dict[str, float] = {}
+
+        if self.config.task_type == "unsupervised":
+            mse = mean_squared_error(y_true, y_pred, multioutput="uniform_average")
+            metrics["recon_mse"] = float(mse)
+            metrics["recon_rmse"] = float(np.sqrt(mse))
+            metrics["recon_mae"] = float(
+                mean_absolute_error(y_true, y_pred, multioutput="uniform_average")
+            )
+            return metrics
 
         # Regression metrics (default)
         if self.config.task_type == "regression":

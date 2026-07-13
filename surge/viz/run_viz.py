@@ -126,7 +126,7 @@ def _resolve_task_type(run_dir: Path) -> str:
             with spec_path.open("r", encoding="utf-8") as handle:
                 spec_payload = yaml.safe_load(handle) or {}
             task_type = str(spec_payload.get("task_type", "")).strip().lower()
-            if task_type in {"regression", "classification"}:
+            if task_type in {"regression", "classification", "unsupervised"}:
                 return task_type
         except Exception:
             pass

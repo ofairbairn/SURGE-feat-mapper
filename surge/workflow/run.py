@@ -230,7 +230,10 @@ def run_surrogate_workflow(
                 format=spec.dataset_format,
                 metadata_path=spec.metadata_path,
                 sample=spec.sample_rows,
-                analyzer_kwargs={"hints": spec.metadata_overrides, **spec.analyzer},
+                analyzer_kwargs={
+                    "hints": {**spec.metadata_overrides, "task_type": spec.task_type},
+                    **spec.analyzer,
+                },
             )
 
         next_step("Preparing splits and scalers...")

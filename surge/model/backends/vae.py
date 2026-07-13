@@ -241,6 +241,29 @@ class VAEModel:
             return pred_idx
         return self._class_labels[pred_idx]
 
+    def encode(self, X, *, sample: bool = False, return_logvar: bool = False):
+        """Encode inputs into latent space.
+
+        Returns the posterior mean by default, which is the stable choice for
+        downstream UMAP / t-SNE projections. Set ``sample=True`` to draw from
+        the posterior instead.
+        """
+        if not self.is_fitted or self._net is None:
+            raise ValueError("Not fitted")
+
+        self._net.eval()
+        Xs = self.scaler_X.transform(np.asarray(X, dtype=np.float64))
+        Xt = torch.from_numpy(Xs.astype(np.float32)).to(self.device)
+
+        with torch.no_grad():
+            mu, logvar = self._net.encode(Xt)
+            z = self._net.reparameterize(mu, logvar) if sample else mu
+
+        latents = z.cpu().numpy()
+        if return_logvar:
+            return latents, logvar.cpu().numpy()
+        return latents
+
     def predict_proba(self, X) -> np.ndarray:
         """Return class probabilities for classification tasks."""
         if self.task != "classification":

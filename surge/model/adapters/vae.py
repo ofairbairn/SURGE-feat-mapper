@@ -90,6 +90,9 @@ class VAEAdapter(BaseModelAdapter):
     def predict(self, X: Any) -> Any:
         return self._model.predict(X)
 
+    def encode(self, X: Any, *, sample: bool = False, return_logvar: bool = False) -> Any:
+        return self._model.encode(X, sample=sample, return_logvar=return_logvar)
+
     def predict_proba(self, X: Any) -> Any:
         return self._model.predict_proba(X)
 
