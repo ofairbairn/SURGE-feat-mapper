@@ -40,4 +40,6 @@ workflow:
         batch_size: 32
         learning_rate: 0.001
         device: cpu
+        verbose: true
+        show_progress: true
       store_predictions: true

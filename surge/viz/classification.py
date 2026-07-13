@@ -65,7 +65,7 @@ def plot_roc_curve(
 ) -> Any:
     """Binary: ``y_prob`` (n,). Multiclass: ``y_prob`` (n, n_classes) OvR micro/macro."""
     _ensure_mpl()
-    from sklearn.metrics import RocCurveDisplay
+    from sklearn.metrics import RocCurveDisplay, auc, roc_curve
     from sklearn.preprocessing import label_binarize
 
     y_true = np.asarray(y_true)
@@ -95,18 +95,46 @@ def plot_roc_curve(
         )
     else:
         yb = label_binarize(y_true, classes=classes)
-        for c, class_label in enumerate(classes):
-            if yb[:, c].sum() == 0:
-                continue
-            RocCurveDisplay.from_predictions(
-                yb[:, c],
-                y_prob[:, c],
-                ax=ax,
-                name=labels[c] if labels and c < len(labels) else str(class_label),
-            )
+        n_classes = y_prob.shape[1]
+        if n_classes > 12:
+            # Large-class fallback: plot micro/macro only to keep legends readable.
+            fpr, tpr, _ = roc_curve(yb.ravel(), y_prob.ravel())
+            ax.plot(fpr, tpr, linewidth=2.0, label="micro-average")
+
+            per_fpr = []
+            per_tpr = []
+            for c in range(n_classes):
+                if yb[:, c].sum() == 0:
+                    continue
+                fpr_c, tpr_c, _ = roc_curve(yb[:, c], y_prob[:, c])
+                per_fpr.append(fpr_c)
+                per_tpr.append(tpr_c)
+            if per_fpr:
+                all_fpr = np.unique(np.concatenate(per_fpr))
+                mean_tpr = np.zeros_like(all_fpr)
+                for fpr_c, tpr_c in zip(per_fpr, per_tpr):
+                    mean_tpr += np.interp(all_fpr, fpr_c, tpr_c)
+                mean_tpr /= max(1, len(per_fpr))
+                ax.plot(
+                    all_fpr,
+                    mean_tpr,
+                    linewidth=2.0,
+                    linestyle="--",
+                    label=f"macro-average (AUC={auc(all_fpr, mean_tpr):.3f})",
+                )
+        else:
+            for c, class_label in enumerate(classes):
+                if yb[:, c].sum() == 0:
+                    continue
+                RocCurveDisplay.from_predictions(
+                    yb[:, c],
+                    y_prob[:, c],
+                    ax=ax,
+                    name=labels[c] if labels and c < len(labels) else str(class_label),
+                )
     ax.plot([0, 1], [0, 1], "k--", alpha=0.4, label="chance")
     ax.set_title(title)
-    ax.legend(loc="lower right", fontsize=8)
+    ax.legend(loc="lower right", fontsize=8, frameon=False)
     _save_figure(fig, Path(save_path) if save_path else None)
     return fig
 
@@ -121,7 +149,7 @@ def plot_precision_recall_curve(
     ax=None,
 ) -> Any:
     _ensure_mpl()
-    from sklearn.metrics import PrecisionRecallDisplay, average_precision_score
+    from sklearn.metrics import PrecisionRecallDisplay, average_precision_score, precision_recall_curve
     from sklearn.preprocessing import label_binarize
 
     y_true = np.asarray(y_true)
@@ -144,18 +172,41 @@ def plot_precision_recall_curve(
             )
         else:
             yb = label_binarize(y_true, classes=classes)
-            for c, class_label in enumerate(classes):
-                if yb[:, c].sum() == 0:
-                    continue
-                ap = average_precision_score(yb[:, c], y_prob[:, c])
-                PrecisionRecallDisplay.from_predictions(
-                    yb[:, c],
-                    y_prob[:, c],
-                    ax=ax,
-                    name=(labels[c] if labels and c < len(labels) else str(class_label)) + f" AP={ap:.2f}",
+            n_classes = y_prob.shape[1]
+            if n_classes > 12:
+                # Large-class fallback: show micro PR and summarize macro AP in title.
+                precision_micro, recall_micro, _ = precision_recall_curve(
+                    yb.ravel(), y_prob.ravel()
                 )
+                ap_micro = average_precision_score(yb, y_prob, average="micro")
+                ap_macro = average_precision_score(yb, y_prob, average="macro")
+                ax.plot(
+                    recall_micro,
+                    precision_micro,
+                    linewidth=2.0,
+                    label=f"micro-average AP={ap_micro:.2f}",
+                )
+                ax.text(
+                    0.02,
+                    0.02,
+                    f"macro AP={ap_macro:.2f}",
+                    transform=ax.transAxes,
+                    fontsize=9,
+                    bbox={"boxstyle": "round,pad=0.25", "fc": "white", "alpha": 0.8},
+                )
+            else:
+                for c, class_label in enumerate(classes):
+                    if yb[:, c].sum() == 0:
+                        continue
+                    ap = average_precision_score(yb[:, c], y_prob[:, c])
+                    PrecisionRecallDisplay.from_predictions(
+                        yb[:, c],
+                        y_prob[:, c],
+                        ax=ax,
+                        name=(labels[c] if labels and c < len(labels) else str(class_label)) + f" AP={ap:.2f}",
+                    )
     ax.set_title(title)
-    ax.legend(loc="best", fontsize=8)
+    ax.legend(loc="best", fontsize=8, frameon=False)
     _save_figure(fig, Path(save_path) if save_path else None)
     return fig
 
@@ -176,13 +227,24 @@ def plot_confusion_matrix(
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     cm = confusion_matrix(y_true, y_pred, normalize="true" if normalize else None)
+    n_classes = cm.shape[0]
+    include_values = n_classes <= 12
+    fig_side = float(min(18.0, max(6.0, 0.45 * n_classes)))
     if ax is None:
-        fig, ax = plt.subplots(figsize=(5.5, 5))
+        fig, ax = plt.subplots(figsize=(fig_side, fig_side * 0.92))
     else:
         fig = ax.figure
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
-    disp.plot(ax=ax, cmap="Blues", colorbar=True, values_format=".2f" if normalize else "d")
+    disp.plot(
+        ax=ax,
+        cmap="Blues",
+        colorbar=True,
+        include_values=include_values,
+        values_format=".2f" if normalize else "d",
+        xticks_rotation=90 if n_classes > 8 else "horizontal",
+    )
     ax.set_title(title)
+    ax.tick_params(axis="both", labelsize=8 if n_classes > 12 else 10)
     fig.tight_layout()
     _save_figure(fig, Path(save_path) if save_path else None)
     return fig

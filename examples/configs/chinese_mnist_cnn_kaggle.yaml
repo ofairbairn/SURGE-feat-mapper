@@ -41,4 +41,6 @@ workflow:
         batch_size: 16 #changed from 32 to reduce memory use
         learning_rate: 0.001
         device: cpu
+        verbose: true
+        show_progress: true
       store_predictions: true
