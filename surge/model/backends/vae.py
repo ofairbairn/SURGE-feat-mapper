@@ -39,8 +39,8 @@ except ImportError:
     torch = nn = optim = DataLoader = TensorDataset = None  # type: ignore
 
 
-def _mlp(dims: list[int], act=None) -> "nn.Sequential":
-    layers: list[nn.Module] = []
+def _mlp(dims: list[int], act=None):
+    layers = []
     for i in range(len(dims) - 1):
         layers.append(nn.Linear(dims[i], dims[i + 1]))
         if i < len(dims) - 2:
@@ -246,6 +246,8 @@ class VAEModel:
                     tl_v = task_loss_fn(y_hat_v, yv_t)
                     val_loss = float((rl_v + self.beta * kl_v + self.regression_weight * tl_v).item())
                 record["val_loss"] = val_loss
+                record["val_recon"] = float(rl_v.item())
+                record["val_kl"] = float(kl_v.item())
                 self._net.train()
 
             self.training_history.append(record)

@@ -95,7 +95,7 @@ def reconstruction_metrics(
         if image_shape is None:
             raise ValueError("image_shape must be provided when include_ssim=True")
         try:
-            from skimage.metrics import structural_similarity
+            from skimage.metrics import structural_similarity  # type: ignore[import-not-found]
         except ImportError:
             metrics["ssim"] = None
             return metrics
@@ -150,19 +150,19 @@ if TORCH_AVAILABLE:
             decoder_layers.append(nn.Linear(decoder_dims[-2], decoder_dims[-1]))
             self.decoder = nn.Sequential(*decoder_layers)
 
-        def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        def encode(self, x):
             h = self.encoder(x)
             return self.fc_mu(h), self.fc_logvar(h)
 
-        def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        def reparameterize(self, mu, logvar):
             std = torch.exp(0.5 * logvar)
             eps = torch.randn_like(std)
             return mu + eps * std
 
-        def decode(self, z: torch.Tensor) -> torch.Tensor:
+        def decode(self, z):
             return self.decoder(z)
 
-        def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        def forward(self, x):
             mu, logvar = self.encode(x)
             z = self.reparameterize(mu, logvar)
             recon = self.decode(z)
@@ -175,6 +175,8 @@ class _TorchVAETrainState:
     train_recon: float
     train_kl: float
     val_loss: Optional[float] = None
+    val_recon: Optional[float] = None
+    val_kl: Optional[float] = None
 
 
 class OwenVAEModel:
@@ -227,11 +229,11 @@ class OwenVAEModel:
 
     def _loss_components(
         self,
-        recon_x: torch.Tensor,
-        x: torch.Tensor,
-        mu: torch.Tensor,
-        logvar: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        recon_x,
+        x,
+        mu,
+        logvar,
+    ):
         recon_loss = torch.mean((recon_x - x) ** 2)
         kl = -0.5 * torch.mean(1.0 + logvar - mu.pow(2) - logvar.exp())
         total = recon_loss + self.beta * kl
@@ -248,7 +250,7 @@ class OwenVAEModel:
             hidden_dims=self.hidden_dims,
         ).to(self.device)
 
-    def _make_loader(self, X: np.ndarray, *, shuffle: bool) -> DataLoader:
+    def _make_loader(self, X: np.ndarray, *, shuffle: bool):
         tensor = torch.tensor(X, dtype=torch.float32)
         dataset = TensorDataset(tensor)
         return DataLoader(
@@ -317,16 +319,22 @@ class OwenVAEModel:
             if val_loader is not None:
                 self.model.eval()
                 val_loss_total = 0.0
+                val_recon_total = 0.0
+                val_kl_total = 0.0
                 val_count = 0
                 with torch.no_grad():
                     for (batch_val,) in val_loader:
                         batch_val = batch_val.to(self.device, non_blocking=True)
                         recon, mu, logvar = self.model(batch_val)
-                        loss, _, _ = self._loss_components(recon, batch_val, mu, logvar)
+                        loss, recon_loss, kl = self._loss_components(recon, batch_val, mu, logvar)
                         bs = batch_val.size(0)
                         val_count += bs
                         val_loss_total += float(loss.detach().cpu().item()) * bs
+                        val_recon_total += float(recon_loss.detach().cpu().item()) * bs
+                        val_kl_total += float(kl.detach().cpu().item()) * bs
                 train_state.val_loss = val_loss_total / max(1, val_count)
+                train_state.val_recon = val_recon_total / max(1, val_count)
+                train_state.val_kl = val_kl_total / max(1, val_count)
                 self.model.train()
 
             row: Dict[str, float] = {
@@ -337,6 +345,10 @@ class OwenVAEModel:
             }
             if train_state.val_loss is not None:
                 row["val_loss"] = float(train_state.val_loss)
+            if train_state.val_recon is not None:
+                row["val_recon"] = float(train_state.val_recon)
+            if train_state.val_kl is not None:
+                row["val_kl"] = float(train_state.val_kl)
             self.training_history.append(row)
 
             if self.verbose and (epoch == 1 or epoch % 10 == 0 or epoch == self.n_epochs):

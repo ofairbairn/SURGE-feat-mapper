@@ -146,14 +146,31 @@ def plot_training_dashboard(
     model_name: str = "",
     save_path: Path | str | None = None,
 ) -> Any:
-    """Two-panel dashboard: train loss plus best available validation metric."""
+    """Training dashboard.
+
+    Classification-style histories with validation accuracy render as a
+    two-panel figure. Unsupervised/regression histories without validation
+    accuracy render as a single loss-only figure.
+    """
     if not MPL_AVAILABLE:
         raise ImportError("matplotlib is required for plot_training_dashboard")
     hist = load_training_history(history)
     if not hist:
         raise ValueError("Empty training history")
 
-    fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+    val_accuracy = [h.get("val_accuracy") for h in hist]
+    validation_accuracy = [h.get("validation_accuracy") for h in hist]
+    has_val_accuracy = any(v is not None for v in val_accuracy) or any(
+        v is not None for v in validation_accuracy
+    )
+
+    if has_val_accuracy:
+        fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+        loss_ax = axes[0]
+        metric_ax = axes[1]
+    else:
+        fig, loss_ax = plt.subplots(1, 1, figsize=(9, 4.8))
+        metric_ax = None
     suptitle = "Training dashboard"
     if model_name:
         suptitle = f"{suptitle} — {model_name}"
@@ -174,48 +191,37 @@ def plot_training_dashboard(
         prefix = [float(values[0])] * (width - 1)
         return prefix + smoothed.astype(float).tolist()
 
-    axes[0].plot(epochs, train_loss, label="train_loss", color="cornflowerblue", linewidth=2.0)
-    axes[0].plot(epochs, _rolling_mean(train_loss), label="train_loss_rolling_mean", color="indianred", linewidth=2.0)
-    axes[0].set_ylabel("loss")
-    axes[0].legend(loc="best")
-    axes[0].grid(True, alpha=0.3)
+    loss_ax.plot(epochs, train_loss, label="train_loss", color="cornflowerblue", linewidth=1.5)
+    loss_ax.plot(epochs, _rolling_mean(train_loss), label="train_loss_rolling_mean", color="indianred", linewidth=2.0)
+    val_loss = [h.get("val_loss") for h in hist]
+    if any(v is not None for v in val_loss):
+        loss_ax.plot(
+            epochs,
+            [float(v) if v is not None else np.nan for v in val_loss],
+            label="val_loss",
+            color="darkgreen",
+            linewidth=1.6,
+        )
+    loss_ax.set_ylabel("loss")
+    loss_ax.set_xlabel("epoch")
+    loss_ax.legend(loc="best")
+    loss_ax.grid(True, alpha=0.3)
 
-    # Prefer explicit validation accuracy when present, otherwise fall back to
-    # validation loss/other common validation metrics used by regression and
-    # unsupervised models.
-    preferred_metrics = (
-        "val_accuracy",
-        "validation_accuracy",
-        "val_loss",
-        "val_rmse",
-        "val_mae",
-    )
-    metric_name = None
-    metric_values = None
-    for candidate in preferred_metrics:
-        values = [h.get(candidate) for h in hist]
-        if any(v is not None for v in values):
-            metric_name = candidate
-            metric_values = values
-            break
-
-    if metric_name is not None and metric_values is not None:
-        axes[1].plot(
+    if has_val_accuracy and metric_ax is not None:
+        metric_values = val_accuracy if any(v is not None for v in val_accuracy) else validation_accuracy
+        metric_name = "val_accuracy" if any(v is not None for v in val_accuracy) else "validation_accuracy"
+        metric_ax.plot(
             epochs,
             [float(v) if v is not None else np.nan for v in metric_values],
             label=metric_name,
             color="goldenrod",
             linewidth=2.0,
         )
-        axes[1].set_ylabel(metric_name.replace("_", " "))
-        if metric_name in {"val_accuracy", "validation_accuracy"}:
-            axes[1].set_ylim(0.0, 1.0)
-        axes[1].legend(loc="best")
-    else:
-        axes[1].text(0.5, 0.5, "No val metric in history", ha="center", va="center")
-        axes[1].set_axis_off()
-    axes[1].set_xlabel("epoch")
-    axes[1].grid(True, alpha=0.3)
+        metric_ax.set_ylabel(metric_name.replace("_", " "))
+        metric_ax.set_ylim(0.0, 1.0)
+        metric_ax.set_xlabel("epoch")
+        metric_ax.legend(loc="best")
+        metric_ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
     if save_path is not None:
