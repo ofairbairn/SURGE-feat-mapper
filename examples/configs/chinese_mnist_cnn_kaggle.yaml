@@ -36,9 +36,9 @@ workflow:
       params:
         input_size: [64, 64]
         input_channels: 1
-        hidden_channels: [16, 32]
-        epochs: 10
-        batch_size: 16 #changed from 32 to reduce memory use
-        learning_rate: 0.001
+        hidden_channels: [32, 64]
+        epochs: 20
+        batch_size: 32 #changed from 32 to reduce memory use
+        learning_rate: 1e-4
         device: cpu
       store_predictions: true

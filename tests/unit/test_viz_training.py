@@ -18,9 +18,9 @@ from surge.viz.training import (
 
 def _sample_history():
     return [
-        {"epoch": 1, "train_loss": 0.5, "val_loss": 0.55, "train_rmse_scaled": 0.7, "val_rmse_scaled": 0.72, "lr": 1e-3},
-        {"epoch": 2, "train_loss": 0.3, "val_loss": 0.35, "train_rmse_scaled": 0.55, "val_rmse_scaled": 0.59, "lr": 1e-3},
-        {"epoch": 3, "train_loss": 0.2, "val_loss": 0.28, "train_rmse_scaled": 0.45, "val_rmse_scaled": 0.52, "lr": 5e-4},
+        {"epoch": 1, "train_loss": 0.5, "val_loss": 0.55, "val_accuracy": 0.62, "train_rmse_scaled": 0.7, "val_rmse_scaled": 0.72, "lr": 1e-3},
+        {"epoch": 2, "train_loss": 0.3, "val_loss": 0.35, "val_accuracy": 0.75, "train_rmse_scaled": 0.55, "val_rmse_scaled": 0.59, "lr": 1e-3},
+        {"epoch": 3, "train_loss": 0.2, "val_loss": 0.28, "val_accuracy": 0.81, "train_rmse_scaled": 0.45, "val_rmse_scaled": 0.52, "lr": 5e-4},
     ]
 
 
@@ -65,6 +65,9 @@ def test_plot_training_dashboard(tmp_path: Path):
         save_path=tmp_path / "dash.png",
     )
     assert fig is not None
+    assert len(fig.axes) == 2
+    assert fig.axes[0].get_ylabel() == "loss"
+    assert fig.axes[1].get_ylabel() == "validation accuracy"
     assert (tmp_path / "dash.png").is_file()
 
 

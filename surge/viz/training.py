@@ -146,61 +146,57 @@ def plot_training_dashboard(
     model_name: str = "",
     save_path: Path | str | None = None,
 ) -> Any:
-    """Multi-panel: loss, primary val metric (rmse if present), LR."""
+    """Two-panel dashboard for classification runs: train loss and validation accuracy."""
     if not MPL_AVAILABLE:
         raise ImportError("matplotlib is required for plot_training_dashboard")
     hist = load_training_history(history)
     if not hist:
         raise ValueError("Empty training history")
 
-    fig, axes = plt.subplots(3, 1, figsize=(8, 8), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
     suptitle = "Training dashboard"
     if model_name:
         suptitle = f"{suptitle} — {model_name}"
     fig.suptitle(suptitle)
 
     epochs = [int(h["epoch"]) for h in hist]
-    axes[0].plot(epochs, [h["train_loss"] for h in hist], label="train_loss")
-    if any(h.get("val_loss") is not None for h in hist):
-        axes[0].plot(
-            epochs,
-            [h.get("val_loss") if h.get("val_loss") is not None else np.nan for h in hist],
-            label="val_loss",
-        )
-    axes[0].set_ylabel("loss (MSE)")
-    axes[0].legend()
+    train_loss = [float(h["train_loss"]) for h in hist]
+
+    def _rolling_mean(values: list[float], window: int = 5) -> list[float]:
+        if not values:
+            return []
+        width = max(1, min(window, len(values)))
+        kernel = np.ones(width, dtype=np.float64) / float(width)
+        padded = np.asarray(values, dtype=np.float64)
+        if width == 1:
+            return padded.tolist()
+        smoothed = np.convolve(padded, kernel, mode="valid")
+        prefix = [float(values[0])] * (width - 1)
+        return prefix + smoothed.astype(float).tolist()
+
+    axes[0].plot(epochs, train_loss, label="train_loss", color="C0", alpha=0.35, linewidth=1.0)
+    axes[0].plot(epochs, _rolling_mean(train_loss), label="train_loss_rolling_mean", color="C0", linewidth=2.0)
+    axes[0].set_ylabel("loss")
+    axes[0].legend(loc="best")
     axes[0].grid(True, alpha=0.3)
 
-    # Prefer RMSE in scaled space when available
-    if any("val_rmse_scaled" in h and h.get("val_rmse_scaled") is not None for h in hist):
+    val_accuracy = [h.get("val_accuracy") for h in hist]
+    if any(v is not None for v in val_accuracy):
         axes[1].plot(
             epochs,
-            [h.get("train_rmse_scaled", np.nan) for h in hist],
-            label="train_rmse_scaled",
+            [float(v) if v is not None else np.nan for v in val_accuracy],
+            label="val_accuracy",
+            color="C1",
+            linewidth=2.0,
         )
-        axes[1].plot(
-            epochs,
-            [h.get("val_rmse_scaled") if h.get("val_rmse_scaled") is not None else np.nan for h in hist],
-            label="val_rmse_scaled",
-        )
-        axes[1].set_ylabel("RMSE (scaled)")
-    elif any(h.get("val_r2") is not None for h in hist):
-        axes[1].plot(epochs, [h.get("val_r2", np.nan) for h in hist], label="val_r2")
-        axes[1].set_ylabel("R²")
+        axes[1].set_ylabel("validation accuracy")
+        axes[1].set_ylim(0.0, 1.0)
+        axes[1].legend(loc="best")
     else:
         axes[1].text(0.5, 0.5, "No val metric in history", ha="center", va="center")
         axes[1].set_axis_off()
-    axes[1].legend()
+    axes[1].set_xlabel("epoch")
     axes[1].grid(True, alpha=0.3)
-
-    if any("lr" in h for h in hist):
-        axes[2].plot(epochs, [float(h.get("lr", np.nan)) for h in hist], color="C2")
-        axes[2].set_ylabel("lr")
-    else:
-        axes[2].text(0.5, 0.5, "No lr logged", ha="center", va="center")
-        axes[2].set_axis_off()
-    axes[2].set_xlabel("epoch")
-    axes[2].grid(True, alpha=0.3)
 
     fig.tight_layout()
     if save_path is not None:
