@@ -1,0 +1,17 @@
+workflow:
+  dataset_path: "C:\\Users\\Bipo1\\Downloads\\VAE UCI Wine Data\\winequality-white-comma-unsupervised.csv"
+  dataset_format: auto
+  task_type: unsupervised
+
+  models:
+    - key: pytorch.owen_vae
+      name: Owen_VAE
+      params:
+        latent_dim: 8
+        hidden_dims: [128, 64]
+        n_epochs: 150
+        batch_size: 128
+        beta: 1.0
+        learning_rate: 0.001
+        device: cpu
+        verbose: true

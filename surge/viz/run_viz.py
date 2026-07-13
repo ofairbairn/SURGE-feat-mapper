@@ -324,6 +324,275 @@ def viz_hpo(
         return []
 
 
+def viz_unsupervised_latent(
+    run_dir: Path,
+    output_dir: Path,
+    *,
+    split_preference: Tuple[str, ...] = ("val", "train", "test"),
+    random_state: int = 42,
+) -> List[str]:
+    """Generate latent-space UMAP and t-SNE plots for unsupervised runs.
+
+    Uses adapter.encode(X) when available and writes one UMAP and one t-SNE
+    plot per model using the first available split from split_preference.
+    """
+    from ..dataset import SurrogateDataset
+    from ..model.registry import MODEL_REGISTRY
+    from ..workflow.spec import SurrogateWorkflowSpec
+
+    if not YAML_AVAILABLE:
+        LOG.warning("PyYAML required for unsupervised latent visualization.")
+        return []
+
+    spec_file = run_dir / "spec.yaml"
+    summary_file = run_dir / "workflow_summary.json"
+    if not spec_file.exists() or not summary_file.exists():
+        LOG.warning("Missing spec.yaml or workflow_summary.json in %s", run_dir)
+        return []
+
+    try:
+        with spec_file.open("r", encoding="utf-8") as f:
+            spec_dict = yaml.safe_load(f) or {}
+        spec = SurrogateWorkflowSpec.from_dict(spec_dict)
+    except Exception as exc:
+        LOG.warning("Could not load spec for latent visualization: %s", exc)
+        return []
+
+    try:
+        with summary_file.open("r", encoding="utf-8") as f:
+            summary = json.load(f)
+    except Exception as exc:
+        LOG.warning("Could not load workflow summary for latent visualization: %s", exc)
+        return []
+
+    dataset_path = Path(summary.get("dataset", {}).get("file_path", spec.dataset_path))
+    if not dataset_path.exists():
+        LOG.warning("Dataset path %s not found. Skip latent visualization.", dataset_path)
+        return []
+
+    try:
+        dataset = SurrogateDataset.from_path(
+            dataset_path,
+            format=spec.dataset_format,
+            metadata_path=spec.metadata_path,
+            sample=spec.sample_rows,
+            analyzer_kwargs={"hints": spec.metadata_overrides, **spec.analyzer},
+        )
+    except Exception as exc:
+        LOG.warning("Could not load dataset for latent visualization: %s", exc)
+        return []
+
+    if dataset.df is None or not dataset.input_columns:
+        LOG.warning("Dataset has no usable input columns. Skip latent visualization.")
+        return []
+
+    input_scaler = None
+    scalers_dir = run_dir / "scalers"
+    if spec.standardize_inputs and (scalers_dir / "inputs.joblib").exists():
+        input_scaler = joblib.load(scalers_dir / "inputs.joblib")
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        LOG.warning("matplotlib is required for latent visualization plots.")
+        return []
+
+    saved_paths: List[str] = []
+
+    def _resolve_encoder(model_obj: Any) -> Optional[Any]:
+        """Return a callable encoder if available on adapter or wrapped model."""
+        if hasattr(model_obj, "encode") and callable(getattr(model_obj, "encode")):
+            return getattr(model_obj, "encode")
+        inner = getattr(model_obj, "_model", None)
+        if inner is not None and hasattr(inner, "encode") and callable(getattr(inner, "encode")):
+            return getattr(inner, "encode")
+        return None
+
+    model_entries = summary.get("models", [])
+    for model_entry in model_entries:
+        model_name = model_entry.get("name", "model")
+        model_key = model_entry.get("key")
+        if not model_key:
+            model_key = (
+                ((model_entry.get("resources_used") or {}).get("banner") or {}).get("model")
+            )
+        artifacts = model_entry.get("artifacts", {})
+        prediction_files = artifacts.get("predictions", {})
+
+        split = None
+        pred_path = None
+        for candidate in split_preference:
+            candidate_path = prediction_files.get(candidate)
+            if candidate_path:
+                split = candidate
+                pred_path = Path(candidate_path)
+                break
+        if split is None or pred_path is None:
+            LOG.warning("No prediction split found for %s; skipping latent viz.", model_name)
+            continue
+
+        if not pred_path.is_absolute():
+            pred_path = run_dir / pred_path
+        if not pred_path.exists():
+            for ext in (".parquet", ".csv"):
+                alt = run_dir / "predictions" / f"{model_name}_{split}{ext}"
+                if alt.exists():
+                    pred_path = alt
+                    break
+        if not pred_path.exists():
+            LOG.warning("Prediction file not found for %s %s.", model_name, split)
+            continue
+
+        if pred_path.suffix == ".parquet":
+            pred_df = pd.read_parquet(pred_path)
+        else:
+            pred_df = pd.read_csv(pred_path)
+
+        if "index" not in pred_df.columns:
+            LOG.warning("Predictions for %s %s have no index column; skipping.", model_name, split)
+            continue
+
+        indices = pred_df["index"].to_numpy(dtype=int)
+        if indices.size == 0:
+            LOG.warning("Predictions for %s %s are empty; skipping.", model_name, split)
+            continue
+
+        X_raw = dataset.df[dataset.input_columns].iloc[indices].values.astype(np.float64)
+        X = input_scaler.transform(X_raw) if input_scaler is not None else X_raw
+
+        model_path = Path(artifacts.get("model", ""))
+        if not model_path.is_absolute():
+            model_path = run_dir / model_path
+        if not model_path.exists():
+            model_path = run_dir / "models" / Path(str(model_path)).name
+        if not model_path.exists():
+            LOG.warning("Model artifact not found for %s.", model_name)
+            continue
+
+        adapter = None
+        encoder = None
+        # Prefer direct joblib load first: for many SURGE adapters this keeps
+        # richer methods like encode(), while compatibility wrappers can be
+        # intentionally minimal (predict-only).
+        try:
+            raw_obj = joblib.load(model_path)
+            encoder = _resolve_encoder(raw_obj)
+            if encoder is not None:
+                adapter = raw_obj
+        except Exception:
+            adapter = None
+
+        if adapter is None:
+            try:
+                adapter = load_model_compat(model_path, model_entry)
+                encoder = _resolve_encoder(adapter)
+            except Exception as exc:
+                LOG.warning("Could not load model %s for latent viz: %s", model_name, exc)
+                continue
+
+        if encoder is None and model_key and model_key in MODEL_REGISTRY:
+            # Last-resort path: rebuild adapter by registry key, then call load().
+            try:
+                reg_adapter = MODEL_REGISTRY.create(model_key)
+                reg_adapter.load(model_path)
+                encoder = _resolve_encoder(reg_adapter)
+                if encoder is not None:
+                    adapter = reg_adapter
+            except Exception as exc:
+                LOG.warning(
+                    "Registry-based reload failed for %s (%s): %s",
+                    model_name,
+                    model_key,
+                    exc,
+                )
+
+        if encoder is None:
+            LOG.warning("Model %s has no encode() method; skipping latent viz.", model_name)
+            continue
+
+        try:
+            Z = np.asarray(encoder(X), dtype=np.float64)
+        except Exception as exc:
+            LOG.warning("Encoding failed for %s: %s", model_name, exc)
+            continue
+        if Z.ndim != 2 or Z.shape[0] == 0:
+            LOG.warning("Encoded latent matrix invalid for %s: shape=%s", model_name, Z.shape)
+            continue
+
+        safe_model_name = model_name.replace(" ", "_")
+
+        # UMAP
+        try:
+            import umap
+
+            reducer = umap.UMAP(
+                n_neighbors=15,
+                min_dist=0.1,
+                n_components=2,
+                random_state=random_state,
+            )
+            Z_umap = reducer.fit_transform(Z)
+            umap_table = pd.DataFrame({"x": Z_umap[:, 0], "y": Z_umap[:, 1]})
+            umap_parquet = output_dir / f"latent_{safe_model_name}_{split}_umap.parquet"
+            umap_npy = output_dir / f"latent_{safe_model_name}_{split}_umap.npy"
+            umap_png = output_dir / f"latent_{safe_model_name}_{split}_umap.png"
+            umap_table.to_parquet(umap_parquet, index=False)
+            np.save(umap_npy, Z_umap)
+            fig, ax = plt.subplots(figsize=(7, 6))
+            ax.scatter(Z_umap[:, 0], Z_umap[:, 1], s=8, alpha=0.7)
+            ax.set_title(f"{_model_short_name(model_name)} {split} latent UMAP")
+            ax.set_xlabel("UMAP-1")
+            ax.set_ylabel("UMAP-2")
+            fig.tight_layout()
+            fig.savefig(umap_png, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            saved_paths.extend([str(umap_png), str(umap_parquet), str(umap_npy)])
+        except ImportError:
+            LOG.warning("umap-learn is not installed; skipping UMAP for %s.", model_name)
+        except Exception as exc:
+            LOG.warning("UMAP failed for %s: %s", model_name, exc)
+
+        # t-SNE
+        try:
+            from sklearn.manifold import TSNE
+
+            perplexity = float(min(30, max(5, Z.shape[0] // 10)))
+            tsne_kwargs = {
+                "n_components": 2,
+                "perplexity": perplexity,
+                "learning_rate": 200,
+                "random_state": random_state,
+                "init": "pca",
+            }
+            try:
+                tsne = TSNE(max_iter=1000, **tsne_kwargs)
+            except TypeError:
+                tsne = TSNE(n_iter=1000, **tsne_kwargs)
+            Z_tsne = tsne.fit_transform(Z)
+            tsne_table = pd.DataFrame({"x": Z_tsne[:, 0], "y": Z_tsne[:, 1]})
+            tsne_parquet = output_dir / f"latent_{safe_model_name}_{split}_tsne.parquet"
+            tsne_npy = output_dir / f"latent_{safe_model_name}_{split}_tsne.npy"
+            tsne_png = output_dir / f"latent_{safe_model_name}_{split}_tsne.png"
+            tsne_table.to_parquet(tsne_parquet, index=False)
+            np.save(tsne_npy, Z_tsne)
+            fig, ax = plt.subplots(figsize=(7, 6))
+            ax.scatter(Z_tsne[:, 0], Z_tsne[:, 1], s=8, alpha=0.7)
+            ax.set_title(f"{_model_short_name(model_name)} {split} latent t-SNE")
+            ax.set_xlabel("t-SNE-1")
+            ax.set_ylabel("t-SNE-2")
+            fig.tight_layout()
+            fig.savefig(tsne_png, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            saved_paths.extend([str(tsne_png), str(tsne_parquet), str(tsne_npy)])
+        except Exception as exc:
+            LOG.warning("t-SNE failed for %s: %s", model_name, exc)
+
+    return saved_paths
+
+
 def viz_run(
     run_dir: Path,
     output_dir: Optional[Path] = None,
@@ -406,6 +675,11 @@ def viz_run(
     all_r2: Dict[str, Any] = {}
     saved_paths: List[Path] = []
     task_type = _resolve_task_type(run_dir)
+
+    if task_type == "unsupervised":
+        latent_paths = viz_unsupervised_latent(run_dir, output_dir)
+        return {"r2": {}, "saved_paths": latent_paths}
+
     is_classification = task_type == "classification"
 
     if not is_classification:

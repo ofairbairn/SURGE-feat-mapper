@@ -1,11 +1,11 @@
 workflow:
-  dataset_path: data/datasets/mnist_converted/mnist_train.parquet
+  dataset_path: "C:\\Users\\Bipo1\\Downloads\\VAE UCI Wine Data\\winequality-red-comma-unsupervised.csv"
   dataset_format: auto
   task_type: unsupervised
 
   models:
-    - key: pytorch.owen_vae
-      name: Owen_VAE
+    - key: pytorch.vae
+      name: VAE
       params:
         latent_dim: 8
         hidden_dims: [128, 64]
