@@ -99,6 +99,367 @@ def _model_short_name(name: str) -> str:
     return DEFAULT_MODEL_DISPLAY.get(name, name.replace("_", " ").title())
 
 
+def _normalize_marker_sizes(recon_error_norm: np.ndarray, *, base: float = 24.0, spread: float = 96.0) -> np.ndarray:
+    values = np.asarray(recon_error_norm, dtype=np.float64)
+    sizes = np.full(values.shape, base, dtype=np.float64)
+    valid = np.isfinite(values)
+    if np.any(valid):
+        sizes[valid] = base + np.clip(values[valid], 0.0, 1.0) * spread
+    return sizes
+
+
+def _infer_label_values(dataset: Any, indices: np.ndarray) -> Optional[np.ndarray]:
+    df = getattr(dataset, "df", None)
+    if df is None:
+        return None
+
+    candidate_columns: List[str] = []
+    candidate_columns.extend([c for c in getattr(dataset, "output_columns", []) if c in df.columns])
+    for fallback in ("label", "labels", "class", "target", "target_label"):
+        if fallback in df.columns and fallback not in candidate_columns:
+            candidate_columns.append(fallback)
+
+    if not candidate_columns:
+        return None
+
+    frame = df.iloc[indices]
+    if len(candidate_columns) == 1:
+        return frame[candidate_columns[0]].to_numpy()
+
+    return frame[candidate_columns].astype(str).agg("|".join, axis=1).to_numpy()
+
+
+def _compute_reconstruction_error(pred_df: pd.DataFrame) -> Optional[np.ndarray]:
+    if "recon_error" in pred_df.columns:
+        return pd.to_numeric(pred_df["recon_error"], errors="coerce").to_numpy(dtype=np.float64)
+
+    y_true_cols = sorted([c for c in pred_df.columns if c.startswith("y_true_")])
+    y_pred_cols = sorted([c for c in pred_df.columns if c.startswith("y_pred_")])
+    if not y_true_cols or not y_pred_cols:
+        if {"y_true", "y_pred"}.issubset(pred_df.columns):
+            true_arr = pd.to_numeric(pred_df["y_true"], errors="coerce").to_numpy(dtype=np.float64)
+            pred_arr = pd.to_numeric(pred_df["y_pred"], errors="coerce").to_numpy(dtype=np.float64)
+            return np.abs(true_arr - pred_arr)
+        return None
+
+    n_pairs = min(len(y_true_cols), len(y_pred_cols))
+    diffs: List[np.ndarray] = []
+    for true_col, pred_col in zip(y_true_cols[:n_pairs], y_pred_cols[:n_pairs]):
+        true_arr = pd.to_numeric(pred_df[true_col], errors="coerce").to_numpy(dtype=np.float64)
+        pred_arr = pd.to_numeric(pred_df[pred_col], errors="coerce").to_numpy(dtype=np.float64)
+        diffs.append(np.square(true_arr - pred_arr))
+
+    if not diffs:
+        return None
+    if len(diffs) == 1:
+        return np.sqrt(diffs[0])
+    return np.sqrt(np.mean(np.column_stack(diffs), axis=1))
+
+
+def _cluster_latent_embeddings(
+    latent: np.ndarray,
+    *,
+    method: str = "kmeans",
+    n_clusters: Optional[int] = None,
+    random_state: int = 42,
+    dbscan_eps: float = 0.5,
+    dbscan_min_samples: int = 5,
+    hdbscan_min_cluster_size: int = 20,
+    agglomerative_linkage: str = "ward",
+) -> tuple[np.ndarray, Optional[np.ndarray]]:
+    latent = np.asarray(latent, dtype=np.float64)
+    n_samples = latent.shape[0]
+    if n_samples < 2 or method.lower() in {"", "none", "off", "no"}:
+        return np.full(n_samples, -1, dtype=int), None
+
+    method_normalized = method.lower().strip()
+    if method_normalized == "kmeans":
+        from sklearn.cluster import KMeans
+
+        n_clusters_eff = int(n_clusters or min(8, max(2, int(np.sqrt(n_samples)))))
+        n_clusters_eff = max(2, min(n_clusters_eff, n_samples))
+        clusterer = KMeans(n_clusters=n_clusters_eff, random_state=random_state, n_init="auto")
+        return clusterer.fit_predict(latent), None
+
+    if method_normalized == "dbscan":
+        from sklearn.cluster import DBSCAN
+
+        clusterer = DBSCAN(eps=dbscan_eps, min_samples=dbscan_min_samples)
+        return clusterer.fit_predict(latent), None
+
+    if method_normalized == "hdbscan":
+        try:
+            import hdbscan
+        except ImportError as exc:
+            raise ImportError("hdbscan is required for cluster_method='hdbscan'") from exc
+
+        clusterer = hdbscan.HDBSCAN(min_cluster_size=hdbscan_min_cluster_size)
+        return clusterer.fit_predict(latent), None
+
+    if method_normalized == "agglomerative":
+        from scipy.cluster.hierarchy import linkage
+        from sklearn.cluster import AgglomerativeClustering
+
+        n_clusters_eff = int(n_clusters or min(8, max(2, int(np.sqrt(n_samples)))))
+        n_clusters_eff = max(2, min(n_clusters_eff, n_samples))
+        clusterer = AgglomerativeClustering(n_clusters=n_clusters_eff, linkage=agglomerative_linkage)
+        labels = clusterer.fit_predict(latent)
+        linkage_matrix = linkage(latent, method=agglomerative_linkage)
+        return labels, linkage_matrix
+
+    raise ValueError(
+        f"Unsupported cluster_method={method!r}. Expected one of: none, kmeans, dbscan, hdbscan, agglomerative."
+    )
+
+
+def _build_latent_dataframe(
+    *,
+    sample_id: np.ndarray,
+    embedding: np.ndarray,
+    embedding_type: str,
+    label: Optional[np.ndarray] = None,
+    cluster: Optional[np.ndarray] = None,
+    recon_error: Optional[np.ndarray] = None,
+) -> pd.DataFrame:
+    df = pd.DataFrame(
+        {
+            "sample_id": np.asarray(sample_id, dtype=np.int64),
+            "x": np.asarray(embedding[:, 0], dtype=np.float64),
+            "y": np.asarray(embedding[:, 1], dtype=np.float64),
+            "embedding_type": embedding_type,
+        }
+    )
+
+    if label is not None:
+        df["label"] = pd.Series(label, index=df.index)
+    else:
+        df["label"] = pd.NA
+
+    if cluster is not None:
+        df["cluster"] = pd.Series(cluster, index=df.index)
+    else:
+        df["cluster"] = pd.NA
+
+    if recon_error is not None:
+        recon_arr = np.asarray(recon_error, dtype=np.float64)
+        df["recon_error"] = recon_arr
+        valid = np.isfinite(recon_arr)
+        recon_norm = np.full(recon_arr.shape, np.nan, dtype=np.float64)
+        if np.any(valid):
+            lo = float(np.nanmin(recon_arr[valid]))
+            hi = float(np.nanmax(recon_arr[valid]))
+            if hi > lo:
+                recon_norm[valid] = (recon_arr[valid] - lo) / (hi - lo)
+            else:
+                recon_norm[valid] = 0.0
+        df["recon_error_norm"] = recon_norm
+    else:
+        df["recon_error"] = pd.NA
+        df["recon_error_norm"] = pd.NA
+
+    return df
+
+
+def _plot_latent_matplotlib(
+    latent_df: pd.DataFrame,
+    *,
+    title: str,
+    out_png: Path,
+    color_by: str = "label",
+) -> None:
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    if color_by not in latent_df.columns or latent_df[color_by].isna().all():
+        color_by = "cluster" if "cluster" in latent_df.columns and not latent_df["cluster"].isna().all() else "label"
+
+    plot_df = latent_df.copy()
+    color_values = plot_df[color_by].astype("string").fillna("NA")
+    unique_values = list(pd.unique(color_values))
+    cmap_name = "tab10" if len(unique_values) <= 10 else "tab20"
+    try:
+        cmap_obj = matplotlib.colormaps.get_cmap(cmap_name).resampled(max(len(unique_values), 1))
+    except AttributeError:
+        cmap_obj = plt.get_cmap(cmap_name, max(len(unique_values), 1))
+    color_map = {value: cmap_obj(i) for i, value in enumerate(unique_values)}
+
+    sizes = _normalize_marker_sizes(plot_df["recon_error_norm"].to_numpy(dtype=np.float64))
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for value in unique_values:
+        mask = color_values == value
+        ax.scatter(
+            plot_df.loc[mask, "x"],
+            plot_df.loc[mask, "y"],
+            s=sizes[mask],
+            c=[color_map[value]],
+            alpha=0.75,
+            label=str(value),
+            edgecolors="none",
+        )
+
+    if "cluster" in plot_df.columns:
+        centroid_rows = plot_df[
+            plot_df["cluster"].notna() & (plot_df["cluster"].astype("string") != "-1")
+        ]
+        if not centroid_rows.empty:
+            centroids = centroid_rows.groupby(centroid_rows["cluster"].astype("string"))[ ["x", "y"] ].mean()
+            for cluster_id, row in centroids.iterrows():
+                ax.text(
+                    row["x"],
+                    row["y"],
+                    str(cluster_id),
+                    fontsize=9,
+                    fontweight="bold",
+                    ha="center",
+                    va="center",
+                    bbox=dict(facecolor="white", alpha=0.65, edgecolor="none", pad=1.5),
+                )
+
+    ax.set_title(title)
+    ax.set_xlabel("Dim 1")
+    ax.set_ylabel("Dim 2")
+    ax.legend(title=color_by, bbox_to_anchor=(1.05, 1), loc="upper left", borderaxespad=0)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _plot_latent_dendrogram(
+    latent: np.ndarray,
+    *,
+    title: str,
+    out_png: Path,
+    random_state: int = 42,
+    max_points: int = 1000,
+    linkage_method: str = "ward",
+) -> Optional[Path]:
+    if latent.shape[0] < 2:
+        return None
+
+    try:
+        import matplotlib.pyplot as plt
+        from scipy.cluster.hierarchy import dendrogram, linkage
+    except ImportError:
+        return None
+
+    latent_plot = latent
+    if latent.shape[0] > max_points:
+        rng = np.random.default_rng(random_state)
+        sample_idx = np.sort(rng.choice(latent.shape[0], size=max_points, replace=False))
+        latent_plot = latent[sample_idx]
+
+    linkage_matrix = linkage(latent_plot, method=linkage_method)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    dendrogram(linkage_matrix, ax=ax, no_labels=True, color_threshold=None)
+    ax.set_title(title)
+    ax.set_xlabel("Sample")
+    ax.set_ylabel("Distance")
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_png
+
+
+def _plot_latent_interactive(
+    latent_df: pd.DataFrame,
+    *,
+    title: str,
+    out_html: Path,
+    color_by: str = "label",
+    random_state: int = 42,
+    hover_sample_frac: float = 0.02,
+    datashader_threshold: int = 50_000,
+) -> Optional[Path]:
+    try:
+        import holoviews as hv
+        import holoviews.operation.datashader as hd
+        import datashader as ds
+    except ImportError:
+        LOG.info("Skipping interactive latent plot because holoviews/datashader are unavailable.")
+        return None
+
+    hv.extension("bokeh")
+
+    plot_df = latent_df.copy()
+    if color_by not in plot_df.columns or plot_df[color_by].isna().all():
+        color_by = "cluster" if "cluster" in plot_df.columns and not plot_df["cluster"].isna().all() else "label"
+
+    if color_by in plot_df.columns:
+        plot_df[color_by] = plot_df[color_by].astype("string").fillna("NA").astype("category")
+    if "cluster" in plot_df.columns:
+        plot_df["cluster"] = plot_df["cluster"].astype("string").fillna("NA")
+    if "label" in plot_df.columns:
+        plot_df["label"] = plot_df["label"].astype("string").fillna("NA")
+
+    hover_cols = [
+        "sample_id",
+        "label",
+        "cluster",
+        "recon_error",
+        "recon_error_norm",
+        "embedding_type",
+    ]
+    hover_cols = [col for col in hover_cols if col in plot_df.columns]
+    hover_tooltips = []
+    for col in hover_cols:
+        if col in {"recon_error", "recon_error_norm"}:
+            hover_tooltips.append((col, f"@{{{col}}}{{0.000}}"))
+        else:
+            hover_tooltips.append((col, f"@{{{col}}}"))
+    cmap_name = "Category10" if plot_df[color_by].nunique() <= 10 else "Category20"
+
+    points = hv.Points(plot_df, kdims=["x", "y"], vdims=hover_cols)
+    if len(plot_df) > datashader_threshold:
+        background = hd.datashade(points, aggregator=ds.count_cat(color_by), cmap=cmap_name, how="eq_hist")
+        hover_n = min(len(plot_df), max(1000, int(len(plot_df) * hover_sample_frac)))
+        sampled = plot_df.sample(n=hover_n, random_state=random_state) if hover_n < len(plot_df) else plot_df
+        hover_points = hv.Points(sampled, kdims=["x", "y"], vdims=hover_cols).opts(
+            size=6,
+            color=color_by,
+            cmap=cmap_name,
+            tools=["hover"],
+            hover_tooltips=hover_tooltips,
+            alpha=0.85,
+            line_color="white",
+            line_alpha=0.2,
+        )
+        overlay = background * hover_points
+    else:
+        overlay = points.opts(
+            size=6,
+            color=color_by,
+            cmap=cmap_name,
+            tools=["hover"],
+            hover_tooltips=hover_tooltips,
+            alpha=0.85,
+            line_color="white",
+            line_alpha=0.2,
+        )
+
+    centroid_rows = plot_df[
+        plot_df["cluster"].notna() & (plot_df["cluster"] != "-1")
+    ]
+    if not centroid_rows.empty:
+        centroid_df = centroid_rows.groupby("cluster", as_index=False)[["x", "y"]].mean()
+        labels = hv.Labels(centroid_df, kdims=["x", "y"], vdims=["cluster"]).opts(
+            text_font_size="10pt",
+            text_color="black",
+        )
+        overlay = overlay * labels
+
+    overlay = overlay.opts(
+        width=900,
+        height=650,
+        title=title,
+        toolbar="above",
+        show_grid=True,
+        legend_position="right",
+    )
+
+    hv.save(overlay, str(out_html), backend="bokeh")
+    return out_html
+
+
 def _is_classification_run(run_dir: Path) -> bool:
     """Best-effort task-type detection from workflow summary metrics."""
     summary_path = run_dir / "workflow_summary.json"
@@ -330,6 +691,15 @@ def viz_unsupervised_latent(
     *,
     split_preference: Tuple[str, ...] = ("val", "train", "test"),
     random_state: int = 42,
+    color_by: str = "label",
+    cluster_method: str = "kmeans",
+    n_clusters: Optional[int] = None,
+    dbscan_eps: float = 0.5,
+    dbscan_min_samples: int = 5,
+    hdbscan_min_cluster_size: int = 20,
+    agglomerative_linkage: str = "ward",
+    interactive_threshold: int = 50_000,
+    interactive_hover_sample_frac: float = 0.02,
 ) -> List[str]:
     """Generate latent-space UMAP and t-SNE plots for unsupervised runs.
 
@@ -400,6 +770,7 @@ def viz_unsupervised_latent(
         LOG.warning("matplotlib is required for latent visualization plots.")
         return []
 
+    output_dir.mkdir(parents=True, exist_ok=True)
     saved_paths: List[str] = []
 
     def _resolve_encoder(model_obj: Any) -> Optional[Any]:
@@ -451,17 +822,36 @@ def viz_unsupervised_latent(
         else:
             pred_df = pd.read_csv(pred_path)
 
-        if "index" not in pred_df.columns:
-            LOG.warning("Predictions for %s %s have no index column; skipping.", model_name, split)
-            continue
-
-        indices = pred_df["index"].to_numpy(dtype=int)
+        if "index" in pred_df.columns:
+            indices = pred_df["index"].to_numpy(dtype=np.int64)
+        else:
+            LOG.warning(
+                "Predictions for %s %s have no index column; using row numbers as sample_id.",
+                model_name,
+                split,
+            )
+            indices = np.arange(len(pred_df), dtype=np.int64)
         if indices.size == 0:
             LOG.warning("Predictions for %s %s are empty; skipping.", model_name, split)
             continue
 
-        X_raw = dataset.df[dataset.input_columns].iloc[indices].values.astype(np.float64)
+        if dataset.df is None:
+            LOG.warning("Dataset frame unavailable for %s; skipping.", model_name)
+            continue
+
+        valid_mask = (indices >= 0) & (indices < len(dataset.df))
+        valid_indices = indices[valid_mask]
+        if valid_indices.size == 0:
+            LOG.warning("No valid indices found for %s %s; skipping.", model_name, split)
+            continue
+
+        valid_pred_df = pred_df.iloc[np.flatnonzero(valid_mask)]
+        X_raw = dataset.df[dataset.input_columns].iloc[valid_indices].values.astype(np.float64)
         X = input_scaler.transform(X_raw) if input_scaler is not None else X_raw
+        label_values = _infer_label_values(dataset, valid_indices)
+        recon_error = _compute_reconstruction_error(valid_pred_df)
+        if recon_error is not None and len(recon_error) != len(valid_indices):
+            recon_error = recon_error[: len(valid_indices)]
 
         model_path = Path(artifacts.get("model", ""))
         if not model_path.is_absolute():
@@ -522,9 +912,81 @@ def viz_unsupervised_latent(
             LOG.warning("Encoded latent matrix invalid for %s: shape=%s", model_name, Z.shape)
             continue
 
+        cluster_labels = None
+        linkage_matrix = None
+        try:
+            cluster_labels, linkage_matrix = _cluster_latent_embeddings(
+                Z,
+                method=cluster_method,
+                n_clusters=n_clusters,
+                random_state=random_state,
+                dbscan_eps=dbscan_eps,
+                dbscan_min_samples=dbscan_min_samples,
+                hdbscan_min_cluster_size=hdbscan_min_cluster_size,
+                agglomerative_linkage=agglomerative_linkage,
+            )
+        except Exception as exc:
+            LOG.warning("Clustering failed for %s %s: %s", model_name, split, exc)
+            cluster_labels = np.full(len(valid_indices), -1, dtype=int)
+            linkage_matrix = None
+
         safe_model_name = model_name.replace(" ", "_")
 
-        # UMAP
+        if cluster_method.lower().strip() == "agglomerative" and linkage_matrix is not None:
+            dendrogram_path = output_dir / f"latent_{safe_model_name}_{split}_dendrogram.png"
+            dendrogram_saved = _plot_latent_dendrogram(
+                Z,
+                title=f"{_model_short_name(model_name)} {split} latent dendrogram",
+                out_png=dendrogram_path,
+                random_state=random_state,
+                linkage_method=agglomerative_linkage,
+            )
+            if dendrogram_saved is not None:
+                saved_paths.append(str(dendrogram_saved))
+
+        def _save_embedding(
+            embedding: np.ndarray,
+            *,
+            embedding_type: str,
+            title: str,
+        ) -> None:
+            embedding_df = _build_latent_dataframe(
+                sample_id=valid_indices,
+                embedding=embedding,
+                embedding_type=embedding_type,
+                label=label_values,
+                cluster=cluster_labels,
+                recon_error=recon_error,
+            )
+            embedding_df["model_name"] = model_name
+            embedding_df["split"] = split
+
+            parquet_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.parquet"
+            embedding_df.to_parquet(parquet_path, index=False)
+            saved_paths.append(str(parquet_path))
+
+            png_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.png"
+            _plot_latent_matplotlib(
+                embedding_df,
+                title=title,
+                out_png=png_path,
+                color_by=color_by,
+            )
+            saved_paths.append(str(png_path))
+
+            html_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.html"
+            html_saved = _plot_latent_interactive(
+                embedding_df,
+                title=title,
+                out_html=html_path,
+                color_by=color_by,
+                random_state=random_state,
+                hover_sample_frac=interactive_hover_sample_frac,
+                datashader_threshold=interactive_threshold,
+            )
+            if html_saved is not None:
+                saved_paths.append(str(html_saved))
+
         try:
             import umap
 
@@ -535,27 +997,16 @@ def viz_unsupervised_latent(
                 random_state=random_state,
             )
             Z_umap = reducer.fit_transform(Z)
-            umap_table = pd.DataFrame({"x": Z_umap[:, 0], "y": Z_umap[:, 1]})
-            umap_parquet = output_dir / f"latent_{safe_model_name}_{split}_umap.parquet"
-            umap_npy = output_dir / f"latent_{safe_model_name}_{split}_umap.npy"
-            umap_png = output_dir / f"latent_{safe_model_name}_{split}_umap.png"
-            umap_table.to_parquet(umap_parquet, index=False)
-            np.save(umap_npy, Z_umap)
-            fig, ax = plt.subplots(figsize=(7, 6))
-            ax.scatter(Z_umap[:, 0], Z_umap[:, 1], s=8, alpha=0.7)
-            ax.set_title(f"{_model_short_name(model_name)} {split} latent UMAP")
-            ax.set_xlabel("UMAP-1")
-            ax.set_ylabel("UMAP-2")
-            fig.tight_layout()
-            fig.savefig(umap_png, dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            saved_paths.extend([str(umap_png), str(umap_parquet), str(umap_npy)])
+            _save_embedding(
+                Z_umap,
+                embedding_type="umap",
+                title=f"{_model_short_name(model_name)} {split} latent UMAP",
+            )
         except ImportError:
             LOG.warning("umap-learn is not installed; skipping UMAP for %s.", model_name)
         except Exception as exc:
             LOG.warning("UMAP failed for %s: %s", model_name, exc)
 
-        # t-SNE
         try:
             from sklearn.manifold import TSNE
 
@@ -572,21 +1023,11 @@ def viz_unsupervised_latent(
             except TypeError:
                 tsne = TSNE(n_iter=1000, **tsne_kwargs)
             Z_tsne = tsne.fit_transform(Z)
-            tsne_table = pd.DataFrame({"x": Z_tsne[:, 0], "y": Z_tsne[:, 1]})
-            tsne_parquet = output_dir / f"latent_{safe_model_name}_{split}_tsne.parquet"
-            tsne_npy = output_dir / f"latent_{safe_model_name}_{split}_tsne.npy"
-            tsne_png = output_dir / f"latent_{safe_model_name}_{split}_tsne.png"
-            tsne_table.to_parquet(tsne_parquet, index=False)
-            np.save(tsne_npy, Z_tsne)
-            fig, ax = plt.subplots(figsize=(7, 6))
-            ax.scatter(Z_tsne[:, 0], Z_tsne[:, 1], s=8, alpha=0.7)
-            ax.set_title(f"{_model_short_name(model_name)} {split} latent t-SNE")
-            ax.set_xlabel("t-SNE-1")
-            ax.set_ylabel("t-SNE-2")
-            fig.tight_layout()
-            fig.savefig(tsne_png, dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            saved_paths.extend([str(tsne_png), str(tsne_parquet), str(tsne_npy)])
+            _save_embedding(
+                Z_tsne,
+                embedding_type="tsne",
+                title=f"{_model_short_name(model_name)} {split} latent t-SNE",
+            )
         except Exception as exc:
             LOG.warning("t-SNE failed for %s: %s", model_name, exc)
 
@@ -613,6 +1054,7 @@ def viz_run(
     datastreamset_size: int = 50000,
     datastreamset_max: int = 10,
     datastreamset_eval_set: Optional[str] = None,
+    unsupervised_latent: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Generate inference comparison plots for a SURGE run directory.
@@ -677,7 +1119,11 @@ def viz_run(
     task_type = _resolve_task_type(run_dir)
 
     if task_type == "unsupervised":
-        latent_paths = viz_unsupervised_latent(run_dir, output_dir)
+        latent_paths = viz_unsupervised_latent(
+            run_dir,
+            output_dir,
+            **(unsupervised_latent or {}),
+        )
         return {"r2": {}, "saved_paths": latent_paths}
 
     is_classification = task_type == "classification"

@@ -9,6 +9,10 @@ pyyaml>=6.0.0
 
 # Visualization (required for plotting functions)
 matplotlib>=3.5.0
+bokeh>=3.4.0
+holoviews>=1.19.0
+datashader>=0.16.0
+hdbscan>=0.8.40
 
 # Optional dependencies for enhanced models
 # PyTorch for enhanced MLP models

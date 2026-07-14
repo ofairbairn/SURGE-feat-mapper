@@ -37,6 +37,7 @@ def main() -> int:
 
 	conversion_cfg = dict(payload.get("conversion", {}))
 	workflow_cfg = dict(payload.get("workflow", {}))
+	viz_cfg = dict(payload.get("viz", {}))
 
 	if conversion_cfg:
 		output_csv = convert_mnist_npy_to_csv(
@@ -64,7 +65,7 @@ def main() -> int:
 
 	run_root = summary.get("artifacts", {}).get("root")
 	if run_root:
-		viz_result = viz_run(Path(run_root))
+		viz_result = viz_run(Path(run_root), **viz_cfg)
 		print("Visualization complete.")
 		for path in viz_result.get("saved_paths", []):
 			print(path)

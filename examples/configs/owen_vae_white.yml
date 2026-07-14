@@ -15,3 +15,12 @@ workflow:
         learning_rate: 0.001
         device: cpu
         verbose: true
+
+viz:
+  include_hpo: false
+  unsupervised_latent:
+    color_by: label
+    cluster_method: hdbscan
+    hdbscan_min_cluster_size: 20
+    interactive_threshold: 50000
+    interactive_hover_sample_frac: 0.02
