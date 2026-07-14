@@ -372,6 +372,99 @@ def test_resnet56_fit_predict(img_data):
     assert preds.shape == (len(X_te),)
 
 
+def test_mnist_cnn_registered():
+    pytest.importorskip("torch")
+    assert "pytorch.mnist_cnn" in MODEL_REGISTRY
+
+
+def test_mnist_cnn_fit_predict_and_roundtrip(tmp_path):
+    pytest.importorskip("torch")
+    rng = np.random.default_rng(42)
+
+    n_samples = 100
+    X = rng.integers(0, 256, size=(n_samples, 28 * 28), dtype=np.uint8)
+    y = np.array([10 + (i % 10) for i in range(n_samples)], dtype=np.int64)
+
+    n_train = 80
+    X_train, X_val = X[:n_train], X[n_train:]
+    y_train, y_val = y[:n_train], y[n_train:]
+
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.mnist_cnn",
+        epochs=2,
+        batch_size=8,
+        learning_rate=1e-2,
+        device="cpu",
+    )
+    adapter.fit(X_train, y_train, X_val=X_val, y_val=y_val)
+
+    assert hasattr(adapter, "training_history")
+    assert isinstance(adapter.training_history, list)
+    assert len(adapter.training_history) > 0
+
+    for entry in adapter.training_history:
+        assert "epoch" in entry
+        assert "train_loss" in entry
+        assert "val_accuracy" in entry
+        assert "val_loss" in entry
+
+    preds = adapter.predict(X[:5])
+    assert preds.shape[0] == 5
+    assert np.issubdtype(preds.dtype, np.integer)
+    assert set(np.unique(preds)).issubset(set(np.unique(y)))
+
+    probs = adapter.predict_proba(X[:5])
+    assert probs.shape == (5, 10)
+    assert np.allclose(probs.sum(axis=1), 1.0, atol=1e-5)
+
+    path = tmp_path / "mnist_cnn_model.pt"
+    adapter.save(path)
+
+    restored = MODEL_REGISTRY.create(
+        "pytorch.mnist_cnn",
+        epochs=1,
+        batch_size=2,
+        learning_rate=1e-3,
+        device="cpu",
+    )
+    restored.load(path)
+    restored_preds = restored.predict(X[:3])
+    assert restored_preds.shape[0] == 3
+
+    adapter.fit(X_train[:20], y_train[:20], X_val=X_val[:5], y_val=y_val[:5])
+    assert len(adapter.training_history) > 0
+
+
+def test_mnist_cnn_supports_channel_last_and_custom_input_size():
+    pytest.importorskip("torch")
+    rng = np.random.default_rng(7)
+
+    X = rng.integers(0, 256, size=(24, 64, 64, 1), dtype=np.uint8)
+    y = np.array([i % 6 for i in range(24)], dtype=np.int64)
+
+    X_train, X_val = X[:18], X[18:]
+    y_train, y_val = y[:18], y[18:]
+
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.mnist_cnn",
+        input_size=(64, 64),
+        input_channels=1,
+        hidden_channels=(16, 32),
+        epochs=2,
+        batch_size=6,
+        learning_rate=1e-3,
+        device="cpu",
+    )
+    adapter.fit(X_train, y_train, X_val=X_val, y_val=y_val)
+
+    preds = adapter.predict(X_val)
+    probs = adapter.predict_proba(X_val)
+
+    assert preds.shape[0] == X_val.shape[0]
+    assert probs.shape == (X_val.shape[0], len(np.unique(y_train)))
+    assert np.allclose(probs.sum(axis=1), 1.0, atol=1e-5)
+
+
 # ── PDE / operator models (Group G) ──────────────────────────────────────────
 
 
