@@ -52,6 +52,24 @@ def multiout_data():
     return X[:60], Y[:60], X[60:], Y[60:]
 
 
+@pytest.fixture()
+def unsup_data():
+    """60-train / 20-test unsupervised data."""
+    rng = np.random.default_rng(3)
+    X = rng.standard_normal((80, 6)).astype("float32")
+    return X[:60], X[60:]
+
+
+@pytest.fixture()
+def owen_target_head_data():
+    """Data where y shape differs from X so the latent Ridge head is used."""
+    rng = np.random.default_rng(4)
+    X = rng.standard_normal((80, 6)).astype("float32")
+    A = np.array([[1, -1], [0.5, 0.5], [-1, 0], [0, 1], [0.3, -0.3], [0.2, 0.8]])
+    Y = (X @ A + 0.05 * rng.standard_normal((80, 2))).astype("float32")
+    return X[:60], Y[:60], X[60:], Y[60:]
+
+
 # ── Sklearn baselines (Group C) ───────────────────────────────────────────────
 
 
@@ -594,6 +612,148 @@ def test_cgan_fit_predict():
     preds = adapter.predict(X_te)
     assert preds.shape == y_te.shape
     assert np.isfinite(preds).all()
+
+
+def test_owen_vae_registered():
+    pytest.importorskip("torch")
+    assert "pytorch.owen_vae" in MODEL_REGISTRY
+
+
+def test_owen_vae_fit_predict_reconstruction_shape(unsup_data):
+    pytest.importorskip("torch")
+    X_tr, X_te = unsup_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.owen_vae",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr)
+    recon = adapter.predict(X_te)
+    assert recon.shape == X_te.shape
+    assert np.isfinite(recon).all()
+
+
+def test_owen_vae_fit_with_validation_data(unsup_data):
+    pytest.importorskip("torch")
+    X_tr, X_val = unsup_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.owen_vae",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr, X_val=X_val)
+    history = adapter.training_history
+    assert history is not None
+    assert len(history) == 2
+    assert all("train_loss" in row for row in history)
+    assert all("val_loss" in row for row in history)
+
+
+def test_owen_vae_encode_decode_roundtrip(unsup_data):
+    pytest.importorskip("torch")
+    X_tr, X_te = unsup_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.owen_vae",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr)
+    z = adapter.encode(X_te, sample=False)
+    assert z.shape == (len(X_te), 4)
+    assert np.isfinite(z).all()
+
+    recon = adapter.decode(z)
+    assert recon.shape == X_te.shape
+    assert np.isfinite(recon).all()
+
+
+def test_owen_vae_target_head_when_y_shape_differs(owen_target_head_data):
+    pytest.importorskip("torch")
+    X_tr, y_tr, X_te, y_te = owen_target_head_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.owen_vae",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr, y_tr)
+    preds = adapter.predict(X_te)
+    assert preds.shape == y_te.shape
+    assert np.isfinite(preds).all()
+
+
+def test_owen_vae_reconstruction_metrics_basic(unsup_data):
+    pytest.importorskip("torch")
+    X_tr, X_te = unsup_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.owen_vae",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr)
+    metrics = adapter.reconstruction_metrics(X_te)
+    for key in ("mse", "mae", "rmse", "latent_var_mean", "kl"):
+        assert key in metrics
+        assert metrics[key] is not None
+        assert np.isfinite(metrics[key])
+    assert metrics["ssim"] is None
+
+
+def test_owen_vae_reconstruction_metrics_ssim_requires_shape(unsup_data):
+    pytest.importorskip("torch")
+    from surge.model.backends.owen_vae import reconstruction_metrics
+
+    _, X_te = unsup_data
+    with pytest.raises(ValueError):
+        reconstruction_metrics(X_te, X_te, include_ssim=True)
+
+
+def test_owen_vae_save_load_round_trip(unsup_data, tmp_path):
+    pytest.importorskip("torch")
+    X_tr, X_te = unsup_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.owen_vae",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr)
+    preds_before = adapter.predict(X_te)
+
+    save_path = tmp_path / "owen_vae.joblib"
+    adapter.save(save_path)
+
+    loaded_adapter = MODEL_REGISTRY.create(
+        "pytorch.owen_vae",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+    )
+    loaded_adapter.load(save_path)
+    preds_after = loaded_adapter.predict(X_te)
+    np.testing.assert_allclose(preds_before, preds_after, rtol=1e-5, atol=1e-6)
+
+
+def test_owen_vae_predict_before_fit_raises():
+    pytest.importorskip("torch")
+    adapter = MODEL_REGISTRY.create("pytorch.owen_vae", latent_dim=4, hidden_dims=(16, 8))
+    with pytest.raises(ValueError):
+        adapter.predict(np.zeros((5, 6), dtype="float32"))
 
 
 # ── MLP Ensemble (Group I) ────────────────────────────────────────────────────
