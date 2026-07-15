@@ -19,8 +19,9 @@ workflow:
 viz:
   include_hpo: false
   unsupervised_latent:
-    color_by: label
+    color_by: cluster
     cluster_method: hdbscan
-    hdbscan_min_cluster_size: 20
+    hdbscan_min_cluster_size: 8
+    hdbscan_min_samples: 3
     interactive_threshold: 50000
     interactive_hover_sample_frac: 0.02

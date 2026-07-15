@@ -165,6 +165,7 @@ def _cluster_latent_embeddings(
     dbscan_eps: float = 0.5,
     dbscan_min_samples: int = 5,
     hdbscan_min_cluster_size: int = 20,
+    hdbscan_min_samples: Optional[int] = None,
     agglomerative_linkage: str = "ward",
 ) -> tuple[np.ndarray, Optional[np.ndarray]]:
     latent = np.asarray(latent, dtype=np.float64)
@@ -193,7 +194,10 @@ def _cluster_latent_embeddings(
         except ImportError as exc:
             raise ImportError("hdbscan is required for cluster_method='hdbscan'") from exc
 
-        clusterer = hdbscan.HDBSCAN(min_cluster_size=hdbscan_min_cluster_size)
+        clusterer = hdbscan.HDBSCAN(
+            min_cluster_size=hdbscan_min_cluster_size,
+            min_samples=hdbscan_min_samples,
+        )
         return clusterer.fit_predict(latent), None
 
     if method_normalized == "agglomerative":
@@ -697,6 +701,7 @@ def viz_unsupervised_latent(
     dbscan_eps: float = 0.5,
     dbscan_min_samples: int = 5,
     hdbscan_min_cluster_size: int = 20,
+    hdbscan_min_samples: Optional[int] = None,
     agglomerative_linkage: str = "ward",
     interactive_threshold: int = 50_000,
     interactive_hover_sample_frac: float = 0.02,
@@ -923,6 +928,7 @@ def viz_unsupervised_latent(
                 dbscan_eps=dbscan_eps,
                 dbscan_min_samples=dbscan_min_samples,
                 hdbscan_min_cluster_size=hdbscan_min_cluster_size,
+                hdbscan_min_samples=hdbscan_min_samples,
                 agglomerative_linkage=agglomerative_linkage,
             )
         except Exception as exc:
