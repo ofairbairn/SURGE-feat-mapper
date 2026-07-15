@@ -1,4 +1,4 @@
-"""Run SURGE workflow for owen's vae on UCI Red data."""
+"""Run SURGE workflow for AE on UCI Red data."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from surge.workflow.run import run_surrogate_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 
 # replaced this line
-DEFAULT_CONFIG = Path("examples/configs/vae_red.yml")
+DEFAULT_CONFIG = Path("examples/configs/ae_red.yml")
 
 
 def parse_args() -> argparse.Namespace:

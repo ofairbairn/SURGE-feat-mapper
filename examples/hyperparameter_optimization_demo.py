@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 
 # Try to import BoTorchSampler
 try:
-    from optuna.integration import BoTorchSampler
+    from optuna_integration import BoTorchSampler
     BOTORCH_AVAILABLE = True
     print("BoTorchSampler is available")
 except ImportError:

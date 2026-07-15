@@ -133,7 +133,7 @@ try:  # pragma: no cover
     from optuna.samplers import TPESampler
 
     try:
-        from optuna.integration import BoTorchSampler
+        from optuna_integration import BoTorchSampler
 
         BOTORCH_AVAILABLE = True
     except Exception:  # pragma: no cover

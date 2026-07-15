@@ -4,14 +4,13 @@ workflow:
   task_type: unsupervised
 
   models:
-    - key: pytorch.owen_vae
-      name: Owen_VAE
+    - key: pytorch.autoencoder
+      name: Autoencoder
       params:
         latent_dim: 8
         hidden_dims: [128, 64]
         n_epochs: 150
         batch_size: 128
-        beta: 1.0
         learning_rate: 0.001
         device: cpu
         verbose: true
@@ -21,9 +20,8 @@ viz:
   unsupervised_latent:
     color_by: cluster
     label_column: quality
-    cluster_method: agglomerative
+    cluster_method: kmeans
     n_clusters: 12
-    agglomerative_linkage: ward
     interactive_threshold: 50000
     interactive_hover_sample_frac: 0.02
     anomaly_quantile: 0.95

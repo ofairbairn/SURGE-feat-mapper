@@ -15,7 +15,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.datasets import make_regression
 import optuna
-from optuna.integration import BoTorchSampler
+from optuna_integration import BoTorchSampler
 from optuna.samplers import TPESampler
 import warnings
 

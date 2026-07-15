@@ -12,7 +12,7 @@ from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.metrics import r2_score, mean_squared_error
 import optuna
 from optuna.samplers import TPESampler
-from optuna.integration import BoTorchSampler
+from optuna_integration import BoTorchSampler
 import warnings
 import time
 

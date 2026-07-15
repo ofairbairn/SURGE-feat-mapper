@@ -18,7 +18,7 @@ except ImportError as e:
     exit(1)
 
 try:
-    from optuna.integration import BoTorchSampler
+    from optuna_integration import BoTorchSampler
     print("✅ BoTorchSampler imported successfully")
     BOTORCH_AVAILABLE = True
 except ImportError as e:
