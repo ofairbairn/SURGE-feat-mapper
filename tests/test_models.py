@@ -614,6 +614,105 @@ def test_cgan_fit_predict():
     assert np.isfinite(preds).all()
 
 
+def test_autoencoder_registered():
+    pytest.importorskip("torch")
+    assert "pytorch.autoencoder" in MODEL_REGISTRY
+
+
+def test_autoencoder_fit_predict_reconstruction_shape(unsup_data):
+    pytest.importorskip("torch")
+    X_tr, X_te = unsup_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.autoencoder",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr)
+    recon = adapter.predict(X_te)
+    assert recon.shape == X_te.shape
+    assert np.isfinite(recon).all()
+
+
+def test_autoencoder_encode_decode_roundtrip(unsup_data):
+    pytest.importorskip("torch")
+    X_tr, X_te = unsup_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.autoencoder",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr)
+    z = adapter.encode(X_te)
+    assert z.shape == (len(X_te), 4)
+
+    recon = adapter.decode(z)
+    assert recon.shape == X_te.shape
+
+
+def test_autoencoder_target_head_when_y_shape_differs(owen_target_head_data):
+    pytest.importorskip("torch")
+    X_tr, y_tr, X_te, y_te = owen_target_head_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.autoencoder",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr, y_tr)
+    preds = adapter.predict(X_te)
+    assert preds.shape == y_te.shape
+
+
+def test_autoencoder_reconstruction_metrics_basic(unsup_data):
+    pytest.importorskip("torch")
+    X_tr, X_te = unsup_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.autoencoder",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr)
+    metrics = adapter.reconstruction_metrics(X_te)
+    for key in ("mse", "mae", "rmse", "latent_var_mean"):
+        assert key in metrics
+        assert metrics[key] is not None
+        assert np.isfinite(metrics[key])
+
+
+def test_autoencoder_save_load_round_trip(unsup_data, tmp_path):
+    pytest.importorskip("torch")
+    X_tr, X_te = unsup_data
+    adapter = MODEL_REGISTRY.create(
+        "pytorch.autoencoder",
+        latent_dim=4,
+        hidden_dims=(16, 8),
+        n_epochs=2,
+        batch_size=16,
+        random_state=0,
+    )
+    adapter.fit(X_tr)
+    preds_before = adapter.predict(X_te)
+
+    save_path = tmp_path / "autoencoder.joblib"
+    adapter.save(save_path)
+
+    loaded = MODEL_REGISTRY.create("pytorch.autoencoder", latent_dim=4, hidden_dims=(16, 8))
+    loaded.load(save_path)
+    preds_after = loaded.predict(X_te)
+    np.testing.assert_allclose(preds_before, preds_after, rtol=1e-5, atol=1e-6)
+
+
 def test_owen_vae_registered():
     pytest.importorskip("torch")
     assert "pytorch.owen_vae" in MODEL_REGISTRY

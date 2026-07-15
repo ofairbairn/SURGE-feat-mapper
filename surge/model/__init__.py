@@ -218,6 +218,15 @@ except Exception:
     pass
 
 try:
+    from .adapters.autoencoder import AutoencoderAdapter
+    from .pytorch import PYTORCH_AVAILABLE as _PTA_AE
+
+    if _PTA_AE:
+        register_model(AutoencoderAdapter, key='pytorch.autoencoder', aliases=['autoencoder', 'ae'])
+except Exception:
+    pass
+
+try:
     from .adapters.fno2d import FNO2dAdapter
     from .pytorch import PYTORCH_AVAILABLE as _PTA13
 

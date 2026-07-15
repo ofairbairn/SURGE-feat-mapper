@@ -4,8 +4,8 @@ workflow:
   task_type: unsupervised
 
   models:
-    - key: pytorch.vae
-      name: VAE
+    - key: pytorch.owen_vae
+      name: Owen_VAE
       params:
         latent_dim: 8
         hidden_dims: [128, 64]
@@ -20,8 +20,16 @@ viz:
   include_hpo: false
   unsupervised_latent:
     color_by: cluster
-    cluster_method: hdbscan
-    hdbscan_min_cluster_size: 8
-    hdbscan_min_samples: 3
+    label_column: quality
+    cluster_method: agglomerative
+    n_clusters: 12
+    agglomerative_linkage: ward
     interactive_threshold: 50000
     interactive_hover_sample_frac: 0.02
+    anomaly_quantile: 0.95
+    latent_quality_n_neighbors: 10
+  unsupervised_reconstruction:
+    top_n_features: 6
+    worst_n_samples: 25
+    anomaly_quantile: 0.95
+    include_image_panels: false

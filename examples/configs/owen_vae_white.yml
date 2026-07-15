@@ -20,7 +20,15 @@ viz:
   include_hpo: false
   unsupervised_latent:
     color_by: cluster
+    label_column: quality
     cluster_method: kmeans
     n_clusters: 12
     interactive_threshold: 50000
     interactive_hover_sample_frac: 0.02
+    anomaly_quantile: 0.95
+    latent_quality_n_neighbors: 10
+  unsupervised_reconstruction:
+    top_n_features: 6
+    worst_n_samples: 25
+    anomaly_quantile: 0.95
+    include_image_panels: false

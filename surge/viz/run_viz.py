@@ -108,12 +108,19 @@ def _normalize_marker_sizes(recon_error_norm: np.ndarray, *, base: float = 24.0,
     return sizes
 
 
-def _infer_label_values(dataset: Any, indices: np.ndarray) -> Optional[np.ndarray]:
+def _infer_label_values(
+    dataset: Any,
+    indices: np.ndarray,
+    *,
+    label_column: Optional[str] = None,
+) -> Optional[np.ndarray]:
     df = getattr(dataset, "df", None)
     if df is None:
         return None
 
     candidate_columns: List[str] = []
+    if label_column and label_column in df.columns:
+        candidate_columns.append(label_column)
     candidate_columns.extend([c for c in getattr(dataset, "output_columns", []) if c in df.columns])
     for fallback in ("label", "labels", "class", "target", "target_label"):
         if fallback in df.columns and fallback not in candidate_columns:
@@ -154,6 +161,98 @@ def _compute_reconstruction_error(pred_df: pd.DataFrame) -> Optional[np.ndarray]
     if len(diffs) == 1:
         return np.sqrt(diffs[0])
     return np.sqrt(np.mean(np.column_stack(diffs), axis=1))
+
+
+def _nearest_neighbor_preservation(
+    X_ref: np.ndarray,
+    X_embed: np.ndarray,
+    *,
+    n_neighbors: int = 10,
+) -> Optional[float]:
+    from sklearn.neighbors import NearestNeighbors
+
+    n = min(len(X_ref), len(X_embed))
+    if n < 3:
+        return None
+    k = max(2, min(n_neighbors + 1, n))
+
+    nn_ref = NearestNeighbors(n_neighbors=k).fit(X_ref)
+    nn_emb = NearestNeighbors(n_neighbors=k).fit(X_embed)
+    ref_neighbors = nn_ref.kneighbors(return_distance=False)[:, 1:]
+    emb_neighbors = nn_emb.kneighbors(return_distance=False)[:, 1:]
+
+    overlaps = []
+    for ref_row, emb_row in zip(ref_neighbors, emb_neighbors):
+        inter = len(set(ref_row.tolist()).intersection(set(emb_row.tolist())))
+        overlaps.append(inter / max(1, len(ref_row)))
+    return float(np.mean(overlaps))
+
+
+def _compute_latent_quality_metrics(
+    latent: np.ndarray,
+    embedding: np.ndarray,
+    clusters: Optional[np.ndarray],
+    *,
+    n_neighbors: int = 10,
+) -> Dict[str, Any]:
+    from sklearn.manifold import trustworthiness
+    from sklearn.metrics import davies_bouldin_score, silhouette_score
+
+    metrics: Dict[str, Any] = {}
+    n = min(len(latent), len(embedding))
+    if n < 3:
+        metrics["trustworthiness"] = None
+        metrics["nearest_neighbor_preservation"] = None
+        metrics["silhouette"] = None
+        metrics["davies_bouldin"] = None
+        metrics["n_clusters"] = 0
+        metrics["noise_fraction"] = None
+        return metrics
+
+    k = min(max(2, n_neighbors), n - 1)
+    try:
+        metrics["trustworthiness"] = float(trustworthiness(latent, embedding, n_neighbors=k))
+    except Exception:
+        metrics["trustworthiness"] = None
+
+    try:
+        metrics["nearest_neighbor_preservation"] = _nearest_neighbor_preservation(
+            latent,
+            embedding,
+            n_neighbors=k,
+        )
+    except Exception:
+        metrics["nearest_neighbor_preservation"] = None
+
+    if clusters is None:
+        metrics["silhouette"] = None
+        metrics["davies_bouldin"] = None
+        metrics["n_clusters"] = 0
+        metrics["noise_fraction"] = None
+        return metrics
+
+    labels = np.asarray(clusters)
+    non_noise_mask = labels != -1
+    noise_fraction = 1.0 - float(np.mean(non_noise_mask))
+    valid_labels = labels[non_noise_mask]
+    valid_embedding = embedding[non_noise_mask]
+    unique_labels = np.unique(valid_labels)
+    metrics["n_clusters"] = int(len(unique_labels))
+    metrics["noise_fraction"] = noise_fraction
+    if len(unique_labels) < 2 or len(valid_embedding) <= len(unique_labels):
+        metrics["silhouette"] = None
+        metrics["davies_bouldin"] = None
+        return metrics
+
+    try:
+        metrics["silhouette"] = float(silhouette_score(valid_embedding, valid_labels))
+    except Exception:
+        metrics["silhouette"] = None
+    try:
+        metrics["davies_bouldin"] = float(davies_bouldin_score(valid_embedding, valid_labels))
+    except Exception:
+        metrics["davies_bouldin"] = None
+    return metrics
 
 
 def _cluster_latent_embeddings(
@@ -705,6 +804,9 @@ def viz_unsupervised_latent(
     agglomerative_linkage: str = "ward",
     interactive_threshold: int = 50_000,
     interactive_hover_sample_frac: float = 0.02,
+    anomaly_quantile: float = 0.95,
+    label_column: Optional[str] = None,
+    latent_quality_n_neighbors: int = 10,
 ) -> List[str]:
     """Generate latent-space UMAP and t-SNE plots for unsupervised runs.
 
@@ -853,7 +955,7 @@ def viz_unsupervised_latent(
         valid_pred_df = pred_df.iloc[np.flatnonzero(valid_mask)]
         X_raw = dataset.df[dataset.input_columns].iloc[valid_indices].values.astype(np.float64)
         X = input_scaler.transform(X_raw) if input_scaler is not None else X_raw
-        label_values = _infer_label_values(dataset, valid_indices)
+        label_values = _infer_label_values(dataset, valid_indices, label_column=label_column)
         recon_error = _compute_reconstruction_error(valid_pred_df)
         if recon_error is not None and len(recon_error) != len(valid_indices):
             recon_error = recon_error[: len(valid_indices)]
@@ -967,9 +1069,37 @@ def viz_unsupervised_latent(
             embedding_df["model_name"] = model_name
             embedding_df["split"] = split
 
+            if recon_error is not None:
+                recon_arr = np.asarray(recon_error, dtype=np.float64)
+                valid_recon = np.isfinite(recon_arr)
+                threshold = float(np.nanquantile(recon_arr[valid_recon], anomaly_quantile)) if np.any(valid_recon) else np.nan
+                embedding_df["anomaly_score"] = embedding_df["recon_error_norm"]
+                embedding_df["anomaly_flag"] = (
+                    embedding_df["recon_error"].astype("float64") >= threshold
+                ) if np.isfinite(threshold) else False
+                embedding_df["anomaly_threshold"] = threshold
+
+            quality_payload = {
+                "model_name": model_name,
+                "split": split,
+                "embedding_type": embedding_type,
+                "cluster_method": cluster_method,
+                "quality": _compute_latent_quality_metrics(
+                    Z,
+                    embedding,
+                    cluster_labels,
+                    n_neighbors=latent_quality_n_neighbors,
+                ),
+            }
+
             parquet_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.parquet"
             embedding_df.to_parquet(parquet_path, index=False)
             saved_paths.append(str(parquet_path))
+
+            quality_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}_quality.json"
+            with quality_path.open("w", encoding="utf-8") as f:
+                json.dump(quality_payload, f, indent=2)
+            saved_paths.append(str(quality_path))
 
             png_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.png"
             _plot_latent_matplotlib(
@@ -1040,6 +1170,236 @@ def viz_unsupervised_latent(
     return saved_paths
 
 
+def viz_unsupervised_reconstruction(
+    run_dir: Path,
+    output_dir: Path,
+    *,
+    split_preference: Tuple[str, ...] = ("val", "train", "test"),
+    top_n_features: int = 6,
+    worst_n_samples: int = 25,
+    anomaly_quantile: float = 0.95,
+    include_image_panels: bool = True,
+    image_shape: Optional[Tuple[int, ...]] = None,
+) -> List[str]:
+    """Visual diagnostics comparing original and reconstructed unsupervised outputs."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        LOG.warning("matplotlib is required for unsupervised reconstruction visualization.")
+        return []
+
+    summary_file = run_dir / "workflow_summary.json"
+    if not summary_file.exists():
+        return []
+
+    with summary_file.open("r", encoding="utf-8") as f:
+        summary = json.load(f)
+
+    saved_paths: List[str] = []
+    for model_entry in summary.get("models", []):
+        model_name = model_entry.get("name", "model")
+        artifacts = model_entry.get("artifacts", {})
+        pred_map = artifacts.get("predictions", {})
+
+        split = None
+        pred_path = None
+        for candidate in split_preference:
+            candidate_path = pred_map.get(candidate)
+            if candidate_path:
+                split = candidate
+                pred_path = Path(candidate_path)
+                break
+        if split is None or pred_path is None:
+            continue
+
+        if not pred_path.is_absolute():
+            pred_path = run_dir / pred_path
+        if not pred_path.exists():
+            for ext in (".parquet", ".csv"):
+                alt = run_dir / "predictions" / f"{model_name}_{split}{ext}"
+                if alt.exists():
+                    pred_path = alt
+                    break
+        if not pred_path.exists():
+            continue
+
+        if pred_path.suffix == ".parquet":
+            df = pd.read_parquet(pred_path)
+        else:
+            df = pd.read_csv(pred_path)
+
+        y_true_cols = sorted([c for c in df.columns if c.startswith("y_true_")])
+        y_pred_cols = sorted([c for c in df.columns if c.startswith("y_pred_")])
+        if not y_true_cols or not y_pred_cols:
+            continue
+
+        n_cols = min(len(y_true_cols), len(y_pred_cols))
+        y_true = df[y_true_cols[:n_cols]].to_numpy(dtype=np.float64)
+        y_pred = df[y_pred_cols[:n_cols]].to_numpy(dtype=np.float64)
+        residual = y_pred - y_true
+        abs_residual = np.abs(residual)
+        sample_error = np.sqrt(np.mean(np.square(residual), axis=1))
+
+        if len(sample_error) == 0:
+            continue
+
+        model_key_safe = model_name.replace(" ", "_")
+        out_prefix = output_dir / f"reconstruction_{model_key_safe}_{split}"
+
+        feature_mse = np.mean(np.square(residual), axis=0)
+        feature_mae = np.mean(np.abs(residual), axis=0)
+        feature_rmse = np.sqrt(feature_mse)
+        feature_corr = []
+        feature_r2 = []
+        for i in range(n_cols):
+            yt = y_true[:, i]
+            yp = y_pred[:, i]
+            if np.std(yt) > 0 and np.std(yp) > 0:
+                feature_corr.append(float(np.corrcoef(yt, yp)[0, 1]))
+            else:
+                feature_corr.append(None)
+            try:
+                from sklearn.metrics import r2_score
+
+                feature_r2.append(float(r2_score(yt, yp)))
+            except Exception:
+                feature_r2.append(None)
+
+        summary_df = pd.DataFrame(
+            {
+                "feature": [f"f_{i:02d}" for i in range(n_cols)],
+                "mse": feature_mse,
+                "mae": feature_mae,
+                "rmse": feature_rmse,
+                "corr": feature_corr,
+                "r2": feature_r2,
+            }
+        )
+        summary_df = summary_df.sort_values("rmse", ascending=False)
+
+        summary_parquet = out_prefix.with_name(out_prefix.name + "_feature_summary.parquet")
+        summary_json = out_prefix.with_name(out_prefix.name + "_feature_summary.json")
+        summary_df.to_parquet(summary_parquet, index=False)
+        summary_json.write_text(summary_df.to_json(orient="records", indent=2), encoding="utf-8")
+        saved_paths.extend([str(summary_parquet), str(summary_json)])
+
+        anomaly_threshold = float(np.quantile(sample_error, anomaly_quantile))
+        anomaly_df = pd.DataFrame(
+            {
+                "sample_id": df["index"].to_numpy(dtype=np.int64)
+                if "index" in df.columns
+                else np.arange(len(df), dtype=np.int64),
+                "sample_recon_error": sample_error,
+                "anomaly_score": (sample_error - sample_error.min())
+                / max(1e-12, sample_error.max() - sample_error.min()),
+                "anomaly_flag": sample_error >= anomaly_threshold,
+            }
+        )
+        anomaly_parquet = out_prefix.with_name(out_prefix.name + "_anomaly_scores.parquet")
+        anomaly_json = out_prefix.with_name(out_prefix.name + "_anomaly_scores.json")
+        anomaly_df.to_parquet(anomaly_parquet, index=False)
+        anomaly_json.write_text(anomaly_df.to_json(orient="records", indent=2), encoding="utf-8")
+        saved_paths.extend([str(anomaly_parquet), str(anomaly_json)])
+
+        top_idx = np.argsort(feature_rmse)[::-1][: max(1, min(top_n_features, n_cols))]
+
+        # Feature parity plots.
+        n_plot = len(top_idx)
+        fig, axes = plt.subplots(n_plot, 1, figsize=(7, 3 * n_plot), squeeze=False)
+        for ax, idx in zip(axes.ravel(), top_idx):
+            ax.scatter(y_true[:, idx], y_pred[:, idx], s=10, alpha=0.6)
+            lo = min(float(np.min(y_true[:, idx])), float(np.min(y_pred[:, idx])))
+            hi = max(float(np.max(y_true[:, idx])), float(np.max(y_pred[:, idx])))
+            ax.plot([lo, hi], [lo, hi], linestyle="--", linewidth=1)
+            ax.set_title(f"Feature f_{idx:02d} parity")
+            ax.set_xlabel("Original")
+            ax.set_ylabel("Reconstructed")
+            ax.grid(alpha=0.3)
+        fig.tight_layout()
+        parity_path = out_prefix.with_name(out_prefix.name + "_feature_parity.png")
+        fig.savefig(parity_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        saved_paths.append(str(parity_path))
+
+        # Residual histograms.
+        fig, axes = plt.subplots(n_plot, 1, figsize=(7, 3 * n_plot), squeeze=False)
+        for ax, idx in zip(axes.ravel(), top_idx):
+            ax.hist(residual[:, idx], bins=40, alpha=0.8)
+            ax.axvline(0.0, linestyle="--", linewidth=1)
+            ax.set_title(f"Feature f_{idx:02d} residual histogram")
+            ax.set_xlabel("x_hat - x")
+            ax.set_ylabel("Count")
+            ax.grid(alpha=0.3)
+        fig.tight_layout()
+        hist_path = out_prefix.with_name(out_prefix.name + "_residual_histograms.png")
+        fig.savefig(hist_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        saved_paths.append(str(hist_path))
+
+        # Sample-level reconstruction error distribution.
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.hist(sample_error, bins=50, alpha=0.85)
+        ax.axvline(anomaly_threshold, linestyle="--", linewidth=1.5, color="red")
+        ax.set_title("Sample-level reconstruction error distribution")
+        ax.set_xlabel("RMSE per sample")
+        ax.set_ylabel("Count")
+        ax.grid(alpha=0.3)
+        err_dist_path = out_prefix.with_name(out_prefix.name + "_sample_error_distribution.png")
+        fig.tight_layout()
+        fig.savefig(err_dist_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        saved_paths.append(str(err_dist_path))
+
+        # Worst-sample residual heatmap.
+        worst_n = max(1, min(worst_n_samples, len(sample_error)))
+        worst_idx = np.argsort(sample_error)[-worst_n:]
+        heat = abs_residual[worst_idx]
+        fig, ax = plt.subplots(figsize=(max(7, n_cols * 0.4), max(4, worst_n * 0.2)))
+        im = ax.imshow(heat, aspect="auto", interpolation="nearest")
+        ax.set_title("Absolute residual heatmap (worst reconstructed samples)")
+        ax.set_xlabel("Feature index")
+        ax.set_ylabel("Worst samples")
+        fig.colorbar(im, ax=ax, fraction=0.02, pad=0.01)
+        fig.tight_layout()
+        heatmap_path = out_prefix.with_name(out_prefix.name + "_worst_samples_heatmap.png")
+        fig.savefig(heatmap_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        saved_paths.append(str(heatmap_path))
+
+        if include_image_panels:
+            shape = image_shape
+            if shape is None:
+                side = int(np.sqrt(n_cols))
+                if side * side == n_cols:
+                    shape = (side, side)
+            if shape is not None and int(np.prod(shape)) == n_cols:
+                panel_n = min(6, worst_n)
+                panel_idx = worst_idx[-panel_n:]
+                fig, axes = plt.subplots(panel_n, 3, figsize=(9, 2.5 * panel_n), squeeze=False)
+                for row_i, sample_i in enumerate(panel_idx):
+                    orig = y_true[sample_i].reshape(shape)
+                    recon = y_pred[sample_i].reshape(shape)
+                    diff = np.abs(recon - orig)
+                    for col_i, arr in enumerate((orig, recon, diff)):
+                        ax = axes[row_i, col_i]
+                        im = ax.imshow(arr, cmap="viridis", aspect="auto")
+                        ax.set_xticks([])
+                        ax.set_yticks([])
+                        if row_i == 0:
+                            ax.set_title(("Original", "Reconstructed", "Abs Residual")[col_i])
+                        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+                fig.tight_layout()
+                panel_path = out_prefix.with_name(out_prefix.name + "_image_panels.png")
+                fig.savefig(panel_path, dpi=150, bbox_inches="tight")
+                plt.close(fig)
+                saved_paths.append(str(panel_path))
+
+    return saved_paths
+
+
 def viz_run(
     run_dir: Path,
     output_dir: Optional[Path] = None,
@@ -1061,6 +1421,7 @@ def viz_run(
     datastreamset_max: int = 10,
     datastreamset_eval_set: Optional[str] = None,
     unsupervised_latent: Optional[Dict[str, Any]] = None,
+    unsupervised_reconstruction: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Generate inference comparison plots for a SURGE run directory.
@@ -1130,7 +1491,12 @@ def viz_run(
             output_dir,
             **(unsupervised_latent or {}),
         )
-        return {"r2": {}, "saved_paths": latent_paths}
+        reconstruction_paths = viz_unsupervised_reconstruction(
+            run_dir,
+            output_dir,
+            **(unsupervised_reconstruction or {}),
+        )
+        return {"r2": {}, "saved_paths": [*latent_paths, *reconstruction_paths]}
 
     is_classification = task_type == "classification"
 
