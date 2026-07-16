@@ -21,8 +21,9 @@ viz:
   unsupervised_latent:
     color_by: cluster
     label_column: quality
-    cluster_method: kmeans
-    n_clusters: 12
+    cluster_method: hdbscan
+    hdbscan_min_cluster_size: 8
+    hdbscan_min_samples: 3
     interactive_threshold: 50000
     interactive_hover_sample_frac: 0.02
     anomaly_quantile: 0.95
