@@ -258,7 +258,7 @@ def _compute_latent_quality_metrics(
 def _cluster_latent_embeddings(
     latent: np.ndarray,
     *,
-    method: str = "kmeans",
+    method: str = "hdbscan",
     n_clusters: Optional[int] = None,
     random_state: int = 42,
     dbscan_eps: float = 0.5,
@@ -795,7 +795,7 @@ def viz_unsupervised_latent(
     split_preference: Tuple[str, ...] = ("val", "train", "test"),
     random_state: int = 42,
     color_by: str = "label",
-    cluster_method: str = "kmeans",
+    cluster_method: str = "hdbscan",
     n_clusters: Optional[int] = None,
     dbscan_eps: float = 0.5,
     dbscan_min_samples: int = 5,
@@ -812,6 +812,7 @@ def viz_unsupervised_latent(
 
     Uses adapter.encode(X) when available and writes one UMAP and one t-SNE
     plot per model using the first available split from split_preference.
+    Clustering is computed on latent vectors (Z) before UMAP/t-SNE projection.
     """
     from ..dataset import SurrogateDataset
     from ..model.registry import MODEL_REGISTRY
