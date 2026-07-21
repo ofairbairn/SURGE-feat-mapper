@@ -2,6 +2,13 @@ workflow:
   dataset_path: "C:\\Users\\Bipo1\\Downloads\\VAE UCI Wine Data\\winequality-red-comma-unsupervised.csv"
   dataset_format: auto
   task_type: unsupervised
+  unsupervised_ladder_mode: auto
+  unsupervised_ladder_order: [pca, ae]
+  unsupervised_ladder_emit_all: true
+  unsupervised_ladder_thresholds:
+    pca_min_hopkins: 0.60
+    ae_min_hopkins: 0.55
+    ae_min_recon_improvement: 0.05
 
   models:
     - key: pytorch.autoencoder

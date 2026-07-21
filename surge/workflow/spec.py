@@ -73,6 +73,10 @@ class SurrogateWorkflowSpec:
     batch_dir_target_shape: Optional[tuple] = None  # (n_modes, n_psi) for fixed resolution
     batch_dir_include_eigenmodes: bool = False
     task_type: str = "regression" # can be "regression", "classification", or "unsupervised"
+    unsupervised_ladder_mode: str = "auto"
+    unsupervised_ladder_order: Sequence[str] = field(default_factory=lambda: ("pca", "ae", "vae"))
+    unsupervised_ladder_emit_all: bool = True
+    unsupervised_ladder_thresholds: Dict[str, Any] = field(default_factory=dict)
     # HDF5 leaf name under run*/sparc_* (default: sdata_pertfields_grid_complex_v2.h5).
     # Use sdata_complex_v2.h5 on CFS-style trees where that file holds nonsymmetric δp modes.
     batch_dir_filename: Optional[str] = None

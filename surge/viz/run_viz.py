@@ -962,6 +962,84 @@ def viz_hpo(
         return []
 
 
+def _safe_nanmean(values: Optional[np.ndarray]) -> Optional[float]:
+    if values is None:
+        return None
+    arr = np.asarray(values, dtype=np.float64)
+    valid = np.isfinite(arr)
+    if not np.any(valid):
+        return None
+    return float(np.nanmean(arr[valid]))
+
+
+def _model_ladder_cap(model_key: Optional[str], model_name: str) -> str:
+    token = f"{model_key or ''} {model_name}".lower()
+    return "vae" if "vae" in token else "ae"
+
+
+def _resolve_float_threshold(
+    override: Optional[float],
+    config_map: Dict[str, Any],
+    key: str,
+    default: Optional[float],
+) -> Optional[float]:
+    if override is not None:
+        return float(override)
+    value = config_map.get(key, default)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _select_ladder_stage(
+    *,
+    ladder_mode: str,
+    ladder_order: List[str],
+    available_stages: List[str],
+    pca_pass: bool,
+    ae_pass: bool,
+    vae_pass: bool,
+) -> tuple[str, str]:
+    available = [s for s in available_stages if s in {"pca", "ae", "vae"}]
+    if not available:
+        return "ae", "no_available_stage_fallback"
+
+    force_map = {
+        "force_pca": "pca",
+        "force_ae": "ae",
+        "force_vae": "vae",
+    }
+    if ladder_mode in force_map:
+        target = force_map[ladder_mode]
+        if target in available:
+            return target, f"forced_{target}"
+        return available[0], f"forced_{target}_unavailable"
+
+    if ladder_mode == "force_order":
+        normalized_order = [s.lower().strip() for s in ladder_order if isinstance(s, str)]
+        for stage in normalized_order:
+            if stage in available:
+                return stage, "forced_order"
+        return available[0], "forced_order_fallback"
+
+    if "pca" in available and pca_pass:
+        return "pca", "auto_accept_pca"
+    if "ae" in available and ae_pass:
+        return "ae", "auto_promote_to_ae"
+    if "vae" in available and vae_pass:
+        return "vae", "auto_promote_to_vae"
+
+    # Graceful fallback: pick the strongest available stage.
+    if "vae" in available:
+        return "vae", "auto_fallback_vae"
+    if "ae" in available:
+        return "ae", "auto_fallback_ae"
+    return "pca", "auto_fallback_pca"
+
+
 def viz_unsupervised_latent(
     run_dir: Path,
     output_dir: Path,
@@ -983,6 +1061,15 @@ def viz_unsupervised_latent(
     include_pca_baseline: bool = True,
     pca_n_components: Optional[int] = None,
     pca_max_components: int = 32,
+    ladder_mode: Optional[str] = None,
+    ladder_order: Optional[Tuple[str, ...]] = None,
+    ladder_emit_all_representations: Optional[bool] = None,
+    ladder_pca_min_hopkins: Optional[float] = None,
+    ladder_pca_max_recon_rmse: Optional[float] = None,
+    ladder_ae_min_hopkins: Optional[float] = None,
+    ladder_ae_min_recon_improvement: Optional[float] = None,
+    ladder_vae_min_hopkins: Optional[float] = None,
+    ladder_vae_min_recon_improvement: Optional[float] = None,
     interactive_threshold: int = 50_000,
     interactive_hover_sample_frac: float = 0.02,
     anomaly_quantile: float = 0.95,
@@ -1023,6 +1110,51 @@ def viz_unsupervised_latent(
     except Exception as exc:
         LOG.warning("Could not load workflow summary for latent visualization: %s", exc)
         return []
+
+    ladder_thresholds = dict(getattr(spec, "unsupervised_ladder_thresholds", {}) or {})
+    ladder_mode = str(ladder_mode or getattr(spec, "unsupervised_ladder_mode", "auto")).strip().lower()
+    if ladder_order is None:
+        ladder_order = tuple(getattr(spec, "unsupervised_ladder_order", ("pca", "ae", "vae")))
+    ladder_emit_all_default = bool(getattr(spec, "unsupervised_ladder_emit_all", True))
+    if ladder_emit_all_representations is None:
+        ladder_emit_all_representations = ladder_emit_all_default
+
+    ladder_pca_min_hopkins = _resolve_float_threshold(
+        ladder_pca_min_hopkins,
+        ladder_thresholds,
+        "pca_min_hopkins",
+        0.6,
+    )
+    ladder_pca_max_recon_rmse = _resolve_float_threshold(
+        ladder_pca_max_recon_rmse,
+        ladder_thresholds,
+        "pca_max_recon_rmse",
+        None,
+    )
+    ladder_ae_min_hopkins = _resolve_float_threshold(
+        ladder_ae_min_hopkins,
+        ladder_thresholds,
+        "ae_min_hopkins",
+        0.55,
+    )
+    ladder_ae_min_recon_improvement = _resolve_float_threshold(
+        ladder_ae_min_recon_improvement,
+        ladder_thresholds,
+        "ae_min_recon_improvement",
+        0.05,
+    )
+    ladder_vae_min_hopkins = _resolve_float_threshold(
+        ladder_vae_min_hopkins,
+        ladder_thresholds,
+        "vae_min_hopkins",
+        0.6,
+    )
+    ladder_vae_min_recon_improvement = _resolve_float_threshold(
+        ladder_vae_min_recon_improvement,
+        ladder_thresholds,
+        "vae_min_recon_improvement",
+        0.1,
+    )
 
     dataset_path = Path(summary.get("dataset", {}).get("file_path", spec.dataset_path))
     if not dataset_path.exists():
@@ -1240,76 +1372,165 @@ def viz_unsupervised_latent(
             random_state=random_state,
         )
 
-        if save_tendency_artifacts:
-            tendency_base = output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_tendency"
-            tendency_payload = {
-                key: value
-                for key, value in tendency_summary.items()
-                if key not in {"vat_matrix", "ivat_matrix"}
-            }
-            tendency_json = tendency_base.with_suffix(".json")
-            tendency_json.write_text(json.dumps(tendency_payload, indent=2), encoding="utf-8")
-            saved_paths.append(str(tendency_json))
-
-            vat_png = _save_tendency_heatmap(
-                np.asarray(tendency_summary["vat_matrix"], dtype=np.float64),
-                out_png=output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_vat.png",
-                title=f"{_model_short_name(model_name)} {split} VAT",
+        pca_tendency_summary: Optional[Dict[str, Any]] = None
+        if pca_latent is not None and pca_latent.ndim == 2 and pca_latent.shape[0] > 0:
+            pca_tendency_summary = _summarize_cluster_tendency(
+                pca_latent,
+                hopkins_threshold=hopkins_threshold,
+                sample_size=tendency_sample_size,
+                random_state=random_state,
             )
-            if vat_png is not None:
-                saved_paths.append(str(vat_png))
 
-            ivat_png = _save_tendency_heatmap(
-                np.asarray(tendency_summary["ivat_matrix"], dtype=np.float64),
-                out_png=output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_ivat.png",
-                title=f"{_model_short_name(model_name)} {split} iVAT",
-            )
-            if ivat_png is not None:
-                saved_paths.append(str(ivat_png))
+        learned_hopkins = tendency_summary.get("hopkins")
+        pca_hopkins = pca_tendency_summary.get("hopkins") if pca_tendency_summary is not None else None
+        learned_rmse_mean = _safe_nanmean(recon_error)
+        pca_rmse_mean = _safe_nanmean(pca_recon_error)
+
+        pca_pass = pca_tendency_summary is not None
+        if pca_pass and ladder_pca_min_hopkins is not None and pca_hopkins is not None:
+            pca_pass = bool(float(pca_hopkins) >= float(ladder_pca_min_hopkins))
+        if pca_pass and ladder_pca_max_recon_rmse is not None:
+            pca_pass = pca_rmse_mean is not None and pca_rmse_mean <= float(ladder_pca_max_recon_rmse)
+
+        ae_pass = True
+        if ladder_ae_min_hopkins is not None and learned_hopkins is not None:
+            ae_pass = bool(float(learned_hopkins) >= float(ladder_ae_min_hopkins))
+        if ae_pass and ladder_ae_min_recon_improvement is not None and pca_rmse_mean is not None and learned_rmse_mean is not None and pca_rmse_mean > 0:
+            ae_improvement = (pca_rmse_mean - learned_rmse_mean) / max(abs(pca_rmse_mean), 1e-12)
+            ae_pass = bool(ae_improvement >= float(ladder_ae_min_recon_improvement))
+
+        vae_pass = True
+        if ladder_vae_min_hopkins is not None and learned_hopkins is not None:
+            vae_pass = bool(float(learned_hopkins) >= float(ladder_vae_min_hopkins))
+        if vae_pass and ladder_vae_min_recon_improvement is not None and pca_rmse_mean is not None and learned_rmse_mean is not None and pca_rmse_mean > 0:
+            vae_improvement = (pca_rmse_mean - learned_rmse_mean) / max(abs(pca_rmse_mean), 1e-12)
+            vae_pass = bool(vae_improvement >= float(ladder_vae_min_recon_improvement))
+
+        safe_model_name = model_name.replace(" ", "_")
+        model_cap = _model_ladder_cap(model_key, model_name)
+        available_stages: List[str] = []
+        if pca_tendency_summary is not None:
+            available_stages.append("pca")
+        available_stages.append("ae")
+        if model_cap == "vae":
+            available_stages.append("vae")
+
+        selected_stage, selection_reason = _select_ladder_stage(
+            ladder_mode=ladder_mode,
+            ladder_order=ladder_order,
+            available_stages=available_stages,
+            pca_pass=pca_pass,
+            ae_pass=ae_pass,
+            vae_pass=vae_pass,
+        )
+        emit_learned = bool(ladder_emit_all_representations or selected_stage in {"ae", "vae"})
+        emit_pca = bool(
+            pca_tendency_summary is not None
+            and (ladder_emit_all_representations or selected_stage == "pca")
+        )
+
+        ladder_decision = {
+            "model_name": model_name,
+            "split": split,
+            "ladder_mode": ladder_mode,
+            "ladder_order": list(ladder_order),
+            "selected_stage": selected_stage,
+            "selection_reason": selection_reason,
+            "emit_all_representations": bool(ladder_emit_all_representations),
+            "available_stages": available_stages,
+            "thresholds": {
+                "pca_min_hopkins": ladder_pca_min_hopkins,
+                "pca_max_recon_rmse": ladder_pca_max_recon_rmse,
+                "ae_min_hopkins": ladder_ae_min_hopkins,
+                "ae_min_recon_improvement": ladder_ae_min_recon_improvement,
+                "vae_min_hopkins": ladder_vae_min_hopkins,
+                "vae_min_recon_improvement": ladder_vae_min_recon_improvement,
+            },
+            "metrics": {
+                "pca_hopkins": pca_hopkins,
+                "learned_hopkins": learned_hopkins,
+                "pca_recon_rmse_mean": pca_rmse_mean,
+                "learned_recon_rmse_mean": learned_rmse_mean,
+            },
+            "passes": {
+                "pca": pca_pass,
+                "ae": ae_pass,
+                "vae": vae_pass,
+            },
+        }
+        ladder_decision_path = output_dir / f"latent_{safe_model_name}_{split}_ladder_decision.json"
+        ladder_decision_path.write_text(json.dumps(ladder_decision, indent=2), encoding="utf-8")
+        saved_paths.append(str(ladder_decision_path))
 
         cluster_labels = None
         linkage_matrix = None
-        if apply_tendency_gate and not tendency_summary.get("gate_passed", True):
-            cluster_labels = np.full(len(valid_indices), -1, dtype=int)
-            linkage_matrix = None
-            LOG.info(
-                "Skipping clustering for %s %s because Hopkins=%.4f is below threshold %.4f.",
-                model_name,
-                split,
-                float(tendency_summary.get("hopkins") or float("nan")),
-                float(tendency_summary.get("hopkins_threshold") or hopkins_threshold),
-            )
-        else:
-            try:
-                cluster_labels, linkage_matrix = _cluster_latent_embeddings(
-                    Z,
-                    method=cluster_method,
-                    n_clusters=n_clusters,
-                    random_state=random_state,
-                    dbscan_eps=dbscan_eps,
-                    dbscan_min_samples=dbscan_min_samples,
-                    hdbscan_min_cluster_size=hdbscan_min_cluster_size,
-                    hdbscan_min_samples=hdbscan_min_samples,
-                    agglomerative_linkage=agglomerative_linkage,
+        if emit_learned:
+            if save_tendency_artifacts:
+                tendency_base = output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_tendency"
+                tendency_payload = {
+                    key: value
+                    for key, value in tendency_summary.items()
+                    if key not in {"vat_matrix", "ivat_matrix"}
+                }
+                tendency_json = tendency_base.with_suffix(".json")
+                tendency_json.write_text(json.dumps(tendency_payload, indent=2), encoding="utf-8")
+                saved_paths.append(str(tendency_json))
+
+                vat_png = _save_tendency_heatmap(
+                    np.asarray(tendency_summary["vat_matrix"], dtype=np.float64),
+                    out_png=output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_vat.png",
+                    title=f"{_model_short_name(model_name)} {split} VAT",
                 )
-            except Exception as exc:
-                LOG.warning("Clustering failed for %s %s: %s", model_name, split, exc)
+                if vat_png is not None:
+                    saved_paths.append(str(vat_png))
+
+                ivat_png = _save_tendency_heatmap(
+                    np.asarray(tendency_summary["ivat_matrix"], dtype=np.float64),
+                    out_png=output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_ivat.png",
+                    title=f"{_model_short_name(model_name)} {split} iVAT",
+                )
+                if ivat_png is not None:
+                    saved_paths.append(str(ivat_png))
+
+            if apply_tendency_gate and not tendency_summary.get("gate_passed", True):
                 cluster_labels = np.full(len(valid_indices), -1, dtype=int)
                 linkage_matrix = None
+                LOG.info(
+                    "Skipping clustering for %s %s because Hopkins=%.4f is below threshold %.4f.",
+                    model_name,
+                    split,
+                    float(tendency_summary.get("hopkins") or float("nan")),
+                    float(tendency_summary.get("hopkins_threshold") or hopkins_threshold),
+                )
+            else:
+                try:
+                    cluster_labels, linkage_matrix = _cluster_latent_embeddings(
+                        Z,
+                        method=cluster_method,
+                        n_clusters=n_clusters,
+                        random_state=random_state,
+                        dbscan_eps=dbscan_eps,
+                        dbscan_min_samples=dbscan_min_samples,
+                        hdbscan_min_cluster_size=hdbscan_min_cluster_size,
+                        hdbscan_min_samples=hdbscan_min_samples,
+                        agglomerative_linkage=agglomerative_linkage,
+                    )
+                except Exception as exc:
+                    LOG.warning("Clustering failed for %s %s: %s", model_name, split, exc)
+                    cluster_labels = np.full(len(valid_indices), -1, dtype=int)
+                    linkage_matrix = None
 
-        safe_model_name = model_name.replace(" ", "_")
-
-        if cluster_method.lower().strip() == "agglomerative" and linkage_matrix is not None:
-            dendrogram_path = output_dir / f"latent_{safe_model_name}_{split}_dendrogram.png"
-            dendrogram_saved = _plot_latent_dendrogram(
-                Z,
-                title=f"{_model_short_name(model_name)} {split} latent dendrogram",
-                out_png=dendrogram_path,
-                random_state=random_state,
-                linkage_method=agglomerative_linkage,
-            )
-            if dendrogram_saved is not None:
-                saved_paths.append(str(dendrogram_saved))
+            if cluster_method.lower().strip() == "agglomerative" and linkage_matrix is not None:
+                dendrogram_path = output_dir / f"latent_{safe_model_name}_{split}_dendrogram.png"
+                dendrogram_saved = _plot_latent_dendrogram(
+                    Z,
+                    title=f"{_model_short_name(model_name)} {split} latent dendrogram",
+                    out_png=dendrogram_path,
+                    random_state=random_state,
+                    linkage_method=agglomerative_linkage,
+                )
+                if dendrogram_saved is not None:
+                    saved_paths.append(str(dendrogram_saved))
 
         def _save_embedding(
             embedding: np.ndarray,
@@ -1387,61 +1608,61 @@ def viz_unsupervised_latent(
             if html_saved is not None:
                 saved_paths.append(str(html_saved))
 
-        try:
-            import umap
-
-            reducer = umap.UMAP(
-                n_neighbors=15,
-                min_dist=0.1,
-                n_components=2,
-                random_state=random_state,
-            )
-            Z_umap = reducer.fit_transform(Z)
-            _save_embedding(
-                Z_umap,
-                embedding_type="umap",
-                title=f"{_model_short_name(model_name)} {split} latent UMAP",
-            )
-        except ImportError:
-            LOG.warning("umap-learn is not installed; skipping UMAP for %s.", model_name)
-        except Exception as exc:
-            LOG.warning("UMAP failed for %s: %s", model_name, exc)
-
-        try:
-            from sklearn.manifold import TSNE
-
-            perplexity = float(min(30, max(5, Z.shape[0] // 10)))
-            tsne_kwargs = {
-                "n_components": 2,
-                "perplexity": perplexity,
-                "learning_rate": 200,
-                "random_state": random_state,
-                "init": "pca",
-            }
+        if emit_learned:
             try:
-                tsne = TSNE(max_iter=1000, **tsne_kwargs)
-            except TypeError:
-                tsne = TSNE(n_iter=1000, **tsne_kwargs)
-            Z_tsne = tsne.fit_transform(Z)
-            _save_embedding(
-                Z_tsne,
-                embedding_type="tsne",
-                title=f"{_model_short_name(model_name)} {split} latent t-SNE",
-            )
-        except Exception as exc:
-            LOG.warning("t-SNE failed for %s: %s", model_name, exc)
+                import umap
+
+                reducer = umap.UMAP(
+                    n_neighbors=15,
+                    min_dist=0.1,
+                    n_components=2,
+                    random_state=random_state,
+                )
+                Z_umap = reducer.fit_transform(Z)
+                _save_embedding(
+                    Z_umap,
+                    embedding_type="umap",
+                    title=f"{_model_short_name(model_name)} {split} latent UMAP",
+                )
+            except ImportError:
+                LOG.warning("umap-learn is not installed; skipping UMAP for %s.", model_name)
+            except Exception as exc:
+                LOG.warning("UMAP failed for %s: %s", model_name, exc)
+
+            try:
+                from sklearn.manifold import TSNE
+
+                perplexity = float(min(30, max(5, Z.shape[0] // 10)))
+                tsne_kwargs = {
+                    "n_components": 2,
+                    "perplexity": perplexity,
+                    "learning_rate": 200,
+                    "random_state": random_state,
+                    "init": "pca",
+                }
+                try:
+                    tsne = TSNE(max_iter=1000, **tsne_kwargs)
+                except TypeError:
+                    tsne = TSNE(n_iter=1000, **tsne_kwargs)
+                Z_tsne = tsne.fit_transform(Z)
+                _save_embedding(
+                    Z_tsne,
+                    embedding_type="tsne",
+                    title=f"{_model_short_name(model_name)} {split} latent t-SNE",
+                )
+            except Exception as exc:
+                LOG.warning("t-SNE failed for %s: %s", model_name, exc)
 
         # PCA ladder baseline for unsupervised runs: same split, same downstream
         # gate + clustering + visualization as learned latent embeddings.
-        if pca_latent is not None and pca_latent.ndim == 2 and pca_latent.shape[0] > 0:
+        if (
+            emit_pca
+            and pca_latent is not None
+            and pca_latent.ndim == 2
+            and pca_latent.shape[0] > 0
+            and pca_tendency_summary is not None
+        ):
             pca_tag = f"{safe_model_name}_pca_baseline"
-
-            pca_tendency_summary = _summarize_cluster_tendency(
-                pca_latent,
-                hopkins_threshold=hopkins_threshold,
-                sample_size=tendency_sample_size,
-                random_state=random_state,
-            )
 
             if save_tendency_artifacts:
                 pca_tendency_base = output_dir / f"latent_{pca_tag}_{split}_tendency"
