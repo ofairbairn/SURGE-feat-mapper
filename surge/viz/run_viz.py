@@ -254,6 +254,160 @@ def _compute_latent_quality_metrics(
         metrics["davies_bouldin"] = None
     return metrics
 
+ 
+def _compute_hopkins_statistic(
+    latent: np.ndarray,
+    *,
+    sample_size: Optional[int] = None,
+    random_state: int = 42,
+) -> Optional[float]:
+    """Estimate clustering tendency with the Hopkins statistic.
+
+    Values near 0.5 indicate a random cloud; larger values indicate stronger
+    clustering tendency.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    latent = np.asarray(latent, dtype=np.float64)
+    if latent.ndim != 2 or len(latent) < 3:
+        return None
+
+    n_samples, n_features = latent.shape
+    mins = np.min(latent, axis=0)
+    maxs = np.max(latent, axis=0)
+    if np.any(~np.isfinite(mins)) or np.any(~np.isfinite(maxs)):
+        return None
+    if np.allclose(mins, maxs):
+        return None
+
+    m = int(sample_size or min(max(10, n_samples // 10), 256))
+    m = max(1, min(m, n_samples - 1))
+
+    rng = np.random.default_rng(random_state)
+    real_idx = rng.choice(n_samples, size=m, replace=False)
+    synthetic = rng.uniform(mins, maxs, size=(m, n_features))
+
+    nn = NearestNeighbors(n_neighbors=2).fit(latent)
+    real_distances = nn.kneighbors(latent[real_idx], return_distance=True)[0][:, 1]
+    synthetic_distances = nn.kneighbors(synthetic, return_distance=True)[0][:, 0]
+
+    real_sum = float(np.sum(real_distances))
+    synth_sum = float(np.sum(synthetic_distances))
+    denom = real_sum + synth_sum
+    if denom <= 0.0:
+        return None
+    return synth_sum / denom
+
+
+def _vat_reordering(latent: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return VAT-reordered distance matrix, order, and MST parent links."""
+    from scipy.spatial.distance import pdist, squareform
+
+    latent = np.asarray(latent, dtype=np.float64)
+    n_samples = len(latent)
+    if n_samples == 0:
+        return np.empty((0, 0), dtype=np.float64), np.empty(0, dtype=int), np.empty(0, dtype=int)
+    if n_samples == 1:
+        return np.zeros((1, 1), dtype=np.float64), np.array([0], dtype=int), np.array([-1], dtype=int)
+
+    dist_matrix = squareform(pdist(latent, metric="euclidean"))
+    seed_i, _seed_j = np.unravel_index(np.argmax(dist_matrix), dist_matrix.shape)
+    order: List[int] = [int(seed_i)]
+    parents: List[int] = [-1]
+    remaining = set(range(n_samples))
+    remaining.remove(int(seed_i))
+
+    while remaining:
+        current = np.array(order, dtype=int)
+        candidates = np.array(sorted(remaining), dtype=int)
+        candidate_distances = dist_matrix[np.ix_(current, candidates)]
+        min_to_tree = np.min(candidate_distances, axis=0)
+        candidate_choice = int(np.argmin(min_to_tree))
+        next_idx = int(candidates[candidate_choice])
+        parent_in_current = int(np.argmin(candidate_distances[:, candidate_choice]))
+        parent_idx = parent_in_current
+        order.append(next_idx)
+        parents.append(parent_idx)
+        remaining.remove(next_idx)
+
+    order_arr = np.asarray(order, dtype=int)
+    reordered = dist_matrix[np.ix_(order_arr, order_arr)]
+    return reordered, order_arr, np.asarray(parents, dtype=int)
+
+
+def _ivat_from_vat(
+    vat_matrix: np.ndarray,
+    parents: np.ndarray,
+) -> np.ndarray:
+    """Compute an iVAT-style path-max distance image from a VAT MST."""
+    n_samples = len(vat_matrix)
+    if n_samples == 0:
+        return np.empty((0, 0), dtype=np.float64)
+    if n_samples == 1:
+        return np.zeros((1, 1), dtype=np.float64)
+
+    adjacency: List[List[tuple[int, float]]] = [[] for _ in range(n_samples)]
+    for child in range(1, n_samples):
+        parent = int(parents[child])
+        if parent < 0:
+            continue
+        weight = float(vat_matrix[child, parent])
+        adjacency[child].append((parent, weight))
+        adjacency[parent].append((child, weight))
+
+    ivat = np.zeros((n_samples, n_samples), dtype=np.float64)
+    for start in range(n_samples):
+        visited = {start}
+        stack: List[tuple[int, float]] = [(start, 0.0)]
+        while stack:
+            node, current_max = stack.pop()
+            ivat[start, node] = current_max
+            for neighbor, weight in adjacency[node]:
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                stack.append((neighbor, max(current_max, weight)))
+
+    return ivat
+
+
+def _summarize_cluster_tendency(
+    latent: np.ndarray,
+    *,
+    hopkins_threshold: float = 0.55,
+    sample_size: Optional[int] = None,
+    random_state: int = 42,
+) -> Dict[str, Any]:
+    """Compute tendency diagnostics before clustering latent vectors.
+
+    The automated gate is based on Hopkins. VAT/iVAT are saved as supporting
+    diagnostics because they are primarily visual assessments.
+    """
+    latent = np.asarray(latent, dtype=np.float64)
+    hopkins = _compute_hopkins_statistic(
+        latent,
+        sample_size=sample_size,
+        random_state=random_state,
+    )
+    vat_matrix, vat_order, vat_parents = _vat_reordering(latent)
+    ivat_matrix = _ivat_from_vat(vat_matrix, vat_parents)
+
+    gate_passed = True if hopkins is None else bool(hopkins >= hopkins_threshold)
+    return {
+        "n_samples": int(len(latent)),
+        "latent_dim": int(latent.shape[1]) if latent.ndim == 2 else None,
+        "hopkins": hopkins,
+        "hopkins_threshold": float(hopkins_threshold),
+        "gate_passed": gate_passed,
+        "gate_reason": (
+            "hopkins_below_threshold" if hopkins is not None and hopkins < hopkins_threshold else "pass"
+        ),
+        "vat_order": vat_order.tolist(),
+        "vat_parents": vat_parents.tolist(),
+        "vat_matrix": vat_matrix,
+        "ivat_matrix": ivat_matrix,
+    }
+
 
 def _cluster_latent_embeddings(
     latent: np.ndarray,
@@ -313,6 +467,26 @@ def _cluster_latent_embeddings(
     raise ValueError(
         f"Unsupported cluster_method={method!r}. Expected one of: none, kmeans, dbscan, hdbscan, agglomerative."
     )
+
+
+def _save_tendency_heatmap(matrix: np.ndarray, *, out_png: Path, title: str) -> Optional[Path]:
+    if matrix.size == 0:
+        return None
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(matrix, cmap="viridis", aspect="auto", interpolation="nearest")
+    ax.set_title(title)
+    ax.set_xlabel("Reordered sample index")
+    ax.set_ylabel("Reordered sample index")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_png
 
 
 def _build_latent_dataframe(
@@ -802,6 +976,13 @@ def viz_unsupervised_latent(
     hdbscan_min_cluster_size: int = 20,
     hdbscan_min_samples: Optional[int] = None,
     agglomerative_linkage: str = "ward",
+    apply_tendency_gate: bool = True,
+    hopkins_threshold: float = 0.55,
+    tendency_sample_size: Optional[int] = None,
+    save_tendency_artifacts: bool = True,
+    include_pca_baseline: bool = True,
+    pca_n_components: Optional[int] = None,
+    pca_max_components: int = 32,
     interactive_threshold: int = 50_000,
     interactive_hover_sample_frac: float = 0.02,
     anomaly_quantile: float = 0.95,
@@ -1020,24 +1201,101 @@ def viz_unsupervised_latent(
             LOG.warning("Encoded latent matrix invalid for %s: shape=%s", model_name, Z.shape)
             continue
 
+        pca_latent: Optional[np.ndarray] = None
+        pca_recon_error: Optional[np.ndarray] = None
+        pca_components_used: Optional[int] = None
+        if include_pca_baseline:
+            try:
+                from sklearn.decomposition import PCA
+
+                n_samples, n_features = X.shape
+                max_components = max(1, int(pca_max_components))
+                upper = min(n_samples - 1, n_features, max_components)
+                if upper >= 1:
+                    if pca_n_components is not None:
+                        n_components = int(max(1, min(int(pca_n_components), upper)))
+                    else:
+                        # Keep the baseline roughly comparable to the learned latent width.
+                        n_components = int(max(1, min(upper, Z.shape[1])))
+
+                    pca_model = PCA(n_components=n_components, random_state=random_state)
+                    pca_latent = np.asarray(pca_model.fit_transform(X), dtype=np.float64)
+                    X_recon_pca = np.asarray(pca_model.inverse_transform(pca_latent), dtype=np.float64)
+                    pca_recon_error = np.sqrt(np.mean(np.square(X - X_recon_pca), axis=1))
+                    pca_components_used = n_components
+                else:
+                    LOG.warning(
+                        "Skipping PCA baseline for %s %s: not enough samples/features (shape=%s).",
+                        model_name,
+                        split,
+                        X.shape,
+                    )
+            except Exception as exc:
+                LOG.warning("PCA baseline failed for %s %s: %s", model_name, split, exc)
+
+        tendency_summary = _summarize_cluster_tendency(
+            Z,
+            hopkins_threshold=hopkins_threshold,
+            sample_size=tendency_sample_size,
+            random_state=random_state,
+        )
+
+        if save_tendency_artifacts:
+            tendency_base = output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_tendency"
+            tendency_payload = {
+                key: value
+                for key, value in tendency_summary.items()
+                if key not in {"vat_matrix", "ivat_matrix"}
+            }
+            tendency_json = tendency_base.with_suffix(".json")
+            tendency_json.write_text(json.dumps(tendency_payload, indent=2), encoding="utf-8")
+            saved_paths.append(str(tendency_json))
+
+            vat_png = _save_tendency_heatmap(
+                np.asarray(tendency_summary["vat_matrix"], dtype=np.float64),
+                out_png=output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_vat.png",
+                title=f"{_model_short_name(model_name)} {split} VAT",
+            )
+            if vat_png is not None:
+                saved_paths.append(str(vat_png))
+
+            ivat_png = _save_tendency_heatmap(
+                np.asarray(tendency_summary["ivat_matrix"], dtype=np.float64),
+                out_png=output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_ivat.png",
+                title=f"{_model_short_name(model_name)} {split} iVAT",
+            )
+            if ivat_png is not None:
+                saved_paths.append(str(ivat_png))
+
         cluster_labels = None
         linkage_matrix = None
-        try:
-            cluster_labels, linkage_matrix = _cluster_latent_embeddings(
-                Z,
-                method=cluster_method,
-                n_clusters=n_clusters,
-                random_state=random_state,
-                dbscan_eps=dbscan_eps,
-                dbscan_min_samples=dbscan_min_samples,
-                hdbscan_min_cluster_size=hdbscan_min_cluster_size,
-                hdbscan_min_samples=hdbscan_min_samples,
-                agglomerative_linkage=agglomerative_linkage,
-            )
-        except Exception as exc:
-            LOG.warning("Clustering failed for %s %s: %s", model_name, split, exc)
+        if apply_tendency_gate and not tendency_summary.get("gate_passed", True):
             cluster_labels = np.full(len(valid_indices), -1, dtype=int)
             linkage_matrix = None
+            LOG.info(
+                "Skipping clustering for %s %s because Hopkins=%.4f is below threshold %.4f.",
+                model_name,
+                split,
+                float(tendency_summary.get("hopkins") or float("nan")),
+                float(tendency_summary.get("hopkins_threshold") or hopkins_threshold),
+            )
+        else:
+            try:
+                cluster_labels, linkage_matrix = _cluster_latent_embeddings(
+                    Z,
+                    method=cluster_method,
+                    n_clusters=n_clusters,
+                    random_state=random_state,
+                    dbscan_eps=dbscan_eps,
+                    dbscan_min_samples=dbscan_min_samples,
+                    hdbscan_min_cluster_size=hdbscan_min_cluster_size,
+                    hdbscan_min_samples=hdbscan_min_samples,
+                    agglomerative_linkage=agglomerative_linkage,
+                )
+            except Exception as exc:
+                LOG.warning("Clustering failed for %s %s: %s", model_name, split, exc)
+                cluster_labels = np.full(len(valid_indices), -1, dtype=int)
+                linkage_matrix = None
 
         safe_model_name = model_name.replace(" ", "_")
 
@@ -1085,6 +1343,11 @@ def viz_unsupervised_latent(
                 "split": split,
                 "embedding_type": embedding_type,
                 "cluster_method": cluster_method,
+                "cluster_tendency": {
+                    key: value
+                    for key, value in tendency_summary.items()
+                    if key not in {"vat_matrix", "ivat_matrix"}
+                },
                 "quality": _compute_latent_quality_metrics(
                     Z,
                     embedding,
@@ -1167,6 +1430,216 @@ def viz_unsupervised_latent(
             )
         except Exception as exc:
             LOG.warning("t-SNE failed for %s: %s", model_name, exc)
+
+        # PCA ladder baseline for unsupervised runs: same split, same downstream
+        # gate + clustering + visualization as learned latent embeddings.
+        if pca_latent is not None and pca_latent.ndim == 2 and pca_latent.shape[0] > 0:
+            pca_tag = f"{safe_model_name}_pca_baseline"
+
+            pca_tendency_summary = _summarize_cluster_tendency(
+                pca_latent,
+                hopkins_threshold=hopkins_threshold,
+                sample_size=tendency_sample_size,
+                random_state=random_state,
+            )
+
+            if save_tendency_artifacts:
+                pca_tendency_base = output_dir / f"latent_{pca_tag}_{split}_tendency"
+                pca_tendency_payload = {
+                    key: value
+                    for key, value in pca_tendency_summary.items()
+                    if key not in {"vat_matrix", "ivat_matrix"}
+                }
+                pca_tendency_json = pca_tendency_base.with_suffix(".json")
+                pca_tendency_json.write_text(
+                    json.dumps(pca_tendency_payload, indent=2),
+                    encoding="utf-8",
+                )
+                saved_paths.append(str(pca_tendency_json))
+
+                pca_vat_png = _save_tendency_heatmap(
+                    np.asarray(pca_tendency_summary["vat_matrix"], dtype=np.float64),
+                    out_png=output_dir / f"latent_{pca_tag}_{split}_vat.png",
+                    title=f"{_model_short_name(model_name)} {split} PCA VAT",
+                )
+                if pca_vat_png is not None:
+                    saved_paths.append(str(pca_vat_png))
+
+                pca_ivat_png = _save_tendency_heatmap(
+                    np.asarray(pca_tendency_summary["ivat_matrix"], dtype=np.float64),
+                    out_png=output_dir / f"latent_{pca_tag}_{split}_ivat.png",
+                    title=f"{_model_short_name(model_name)} {split} PCA iVAT",
+                )
+                if pca_ivat_png is not None:
+                    saved_paths.append(str(pca_ivat_png))
+
+            pca_cluster_labels = None
+            pca_linkage_matrix = None
+            if apply_tendency_gate and not pca_tendency_summary.get("gate_passed", True):
+                pca_cluster_labels = np.full(len(valid_indices), -1, dtype=int)
+                pca_linkage_matrix = None
+                LOG.info(
+                    "Skipping PCA clustering for %s %s because Hopkins=%.4f is below threshold %.4f.",
+                    model_name,
+                    split,
+                    float(pca_tendency_summary.get("hopkins") or float("nan")),
+                    float(pca_tendency_summary.get("hopkins_threshold") or hopkins_threshold),
+                )
+            else:
+                try:
+                    pca_cluster_labels, pca_linkage_matrix = _cluster_latent_embeddings(
+                        pca_latent,
+                        method=cluster_method,
+                        n_clusters=n_clusters,
+                        random_state=random_state,
+                        dbscan_eps=dbscan_eps,
+                        dbscan_min_samples=dbscan_min_samples,
+                        hdbscan_min_cluster_size=hdbscan_min_cluster_size,
+                        hdbscan_min_samples=hdbscan_min_samples,
+                        agglomerative_linkage=agglomerative_linkage,
+                    )
+                except Exception as exc:
+                    LOG.warning("PCA clustering failed for %s %s: %s", model_name, split, exc)
+                    pca_cluster_labels = np.full(len(valid_indices), -1, dtype=int)
+                    pca_linkage_matrix = None
+
+            if cluster_method.lower().strip() == "agglomerative" and pca_linkage_matrix is not None:
+                pca_dendrogram_path = output_dir / f"latent_{pca_tag}_{split}_dendrogram.png"
+                pca_dendrogram_saved = _plot_latent_dendrogram(
+                    pca_latent,
+                    title=f"{_model_short_name(model_name)} {split} PCA dendrogram",
+                    out_png=pca_dendrogram_path,
+                    random_state=random_state,
+                    linkage_method=agglomerative_linkage,
+                )
+                if pca_dendrogram_saved is not None:
+                    saved_paths.append(str(pca_dendrogram_saved))
+
+            def _save_pca_embedding(
+                embedding: np.ndarray,
+                *,
+                embedding_type: str,
+                title: str,
+            ) -> None:
+                pca_df = _build_latent_dataframe(
+                    sample_id=valid_indices,
+                    embedding=embedding,
+                    embedding_type=embedding_type,
+                    label=label_values,
+                    cluster=pca_cluster_labels,
+                    recon_error=pca_recon_error,
+                )
+                pca_df["model_name"] = model_name
+                pca_df["split"] = split
+                pca_df["representation"] = "pca_baseline"
+
+                if pca_recon_error is not None:
+                    pca_recon_arr = np.asarray(pca_recon_error, dtype=np.float64)
+                    pca_valid_recon = np.isfinite(pca_recon_arr)
+                    pca_threshold = (
+                        float(np.nanquantile(pca_recon_arr[pca_valid_recon], anomaly_quantile))
+                        if np.any(pca_valid_recon)
+                        else np.nan
+                    )
+                    pca_df["anomaly_score"] = pca_df["recon_error_norm"]
+                    pca_df["anomaly_flag"] = (
+                        pca_df["recon_error"].astype("float64") >= pca_threshold
+                    ) if np.isfinite(pca_threshold) else False
+                    pca_df["anomaly_threshold"] = pca_threshold
+
+                pca_quality_payload = {
+                    "model_name": model_name,
+                    "split": split,
+                    "representation": "pca_baseline",
+                    "pca": {"n_components": pca_components_used},
+                    "embedding_type": embedding_type,
+                    "cluster_method": cluster_method,
+                    "cluster_tendency": {
+                        key: value
+                        for key, value in pca_tendency_summary.items()
+                        if key not in {"vat_matrix", "ivat_matrix"}
+                    },
+                    "quality": _compute_latent_quality_metrics(
+                        pca_latent,
+                        embedding,
+                        pca_cluster_labels,
+                        n_neighbors=latent_quality_n_neighbors,
+                    ),
+                }
+
+                pca_parquet = output_dir / f"latent_{pca_tag}_{split}_{embedding_type}.parquet"
+                pca_df.to_parquet(pca_parquet, index=False)
+                saved_paths.append(str(pca_parquet))
+
+                pca_quality_path = output_dir / f"latent_{pca_tag}_{split}_{embedding_type}_quality.json"
+                with pca_quality_path.open("w", encoding="utf-8") as f:
+                    json.dump(pca_quality_payload, f, indent=2)
+                saved_paths.append(str(pca_quality_path))
+
+                pca_png = output_dir / f"latent_{pca_tag}_{split}_{embedding_type}.png"
+                _plot_latent_matplotlib(
+                    pca_df,
+                    title=title,
+                    out_png=pca_png,
+                    color_by=color_by,
+                )
+                saved_paths.append(str(pca_png))
+
+                pca_html = output_dir / f"latent_{pca_tag}_{split}_{embedding_type}.html"
+                pca_html_saved = _plot_latent_interactive(
+                    pca_df,
+                    title=title,
+                    out_html=pca_html,
+                    color_by=color_by,
+                    random_state=random_state,
+                    hover_sample_frac=interactive_hover_sample_frac,
+                    datashader_threshold=interactive_threshold,
+                )
+                if pca_html_saved is not None:
+                    saved_paths.append(str(pca_html_saved))
+
+            try:
+                import umap
+
+                pca_umap = umap.UMAP(
+                    n_neighbors=15,
+                    min_dist=0.1,
+                    n_components=2,
+                    random_state=random_state,
+                ).fit_transform(pca_latent)
+                _save_pca_embedding(
+                    pca_umap,
+                    embedding_type="umap",
+                    title=f"{_model_short_name(model_name)} {split} PCA baseline UMAP",
+                )
+            except ImportError:
+                LOG.warning("umap-learn is not installed; skipping PCA UMAP for %s.", model_name)
+            except Exception as exc:
+                LOG.warning("PCA UMAP failed for %s: %s", model_name, exc)
+
+            try:
+                from sklearn.manifold import TSNE
+
+                pca_perplexity = float(min(30, max(5, pca_latent.shape[0] // 10)))
+                pca_tsne_kwargs = {
+                    "n_components": 2,
+                    "perplexity": pca_perplexity,
+                    "learning_rate": 200,
+                    "random_state": random_state,
+                    "init": "pca",
+                }
+                try:
+                    pca_tsne = TSNE(max_iter=1000, **pca_tsne_kwargs)
+                except TypeError:
+                    pca_tsne = TSNE(n_iter=1000, **pca_tsne_kwargs)
+                pca_tsne_embedding = pca_tsne.fit_transform(pca_latent)
+                _save_pca_embedding(
+                    pca_tsne_embedding,
+                    embedding_type="tsne",
+                    title=f"{_model_short_name(model_name)} {split} PCA baseline t-SNE",
+                )
+            except Exception as exc:
+                LOG.warning("PCA t-SNE failed for %s: %s", model_name, exc)
 
     return saved_paths
 
