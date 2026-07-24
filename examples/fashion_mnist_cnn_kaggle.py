@@ -43,14 +43,19 @@ def print_test_classification_analysis(summary: dict) -> None:
 		frame = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
 		true_columns = sorted(column for column in frame if column.startswith("y_true_"))
 		pred_columns = sorted(column for column in frame if column.startswith("y_pred_"))
+		prob_columns = sorted(column for column in frame if column.startswith("y_prob_"))
 		if not true_columns or not pred_columns:
 			print(f"Classification analysis skipped for {model_name}: invalid prediction columns.")
+			continue
+		if len(prob_columns) != len(FASHION_CLASSES):
+			print(f"Classification analysis skipped for {model_name}: class probabilities missing.")
 			continue
 
 		print(f"\nFashion-MNIST test classification analysis for {model_name}:")
 		MNISTCNNModel.analyze_predictions(
 			frame[true_columns[0]].to_numpy(),
 			frame[pred_columns[0]].to_numpy(),
+			y_prob=frame[prob_columns].to_numpy(),
 			labels=range(len(FASHION_CLASSES)),
 			class_names=FASHION_CLASSES,
 			top_k=3,

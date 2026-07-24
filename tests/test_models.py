@@ -398,16 +398,36 @@ def test_mnist_cnn_registered():
 def test_mnist_cnn_analyzes_precomputed_predictions(capsys):
     pytest.importorskip("torch")
     from surge.model.backends.mnist_cnn import MNISTCNNModel
+    from surge.metrics import expected_calibration_error
+
+    y_true = np.array([0, 0, 0, 1, 1, 2, 2, 2])
+    y_pred = np.array([0, 1, 1, 1, 0, 2, 1, 0])
+    y_prob = np.array(
+        [
+            [0.80, 0.10, 0.10],
+            [0.30, 0.60, 0.10],
+            [0.20, 0.70, 0.10],
+            [0.10, 0.80, 0.10],
+            [0.60, 0.30, 0.10],
+            [0.10, 0.10, 0.80],
+            [0.10, 0.70, 0.20],
+            [0.60, 0.10, 0.30],
+        ]
+    )
 
     analysis = MNISTCNNModel.analyze_predictions(
-        y_true=np.array([0, 0, 0, 1, 1, 2, 2, 2]),
-        y_pred=np.array([0, 1, 1, 1, 0, 2, 1, 0]),
+        y_true=y_true,
+        y_pred=y_pred,
+        y_prob=y_prob,
         labels=[0, 1, 2],
         class_names=["Alpha", "Beta", "Gamma"],
         top_k=3,
     )
 
     assert analysis["per_class"][0]["accuracy"] == pytest.approx(100 / 3)
+    assert analysis["per_class"][0]["ece"] == pytest.approx(
+        expected_calibration_error((y_true == 0).astype(int), y_prob[:, 0])
+    )
     assert analysis["hardest_class"]["name"] == "Alpha"
     assert analysis["top_confusions"][0] == {
         "true_label": 0,
@@ -420,6 +440,7 @@ def test_mnist_cnn_analyzes_precomputed_predictions(capsys):
     assert analysis["misclassified_indices"] == [1, 2, 4, 6, 7]
     output = capsys.readouterr().out
     assert "Accuracy of Alpha: 33.33 %" in output
+    assert "ECE of Alpha (one-vs-rest):" in output
     assert "Most confused: Alpha -> Beta: 2 samples" in output
 
 

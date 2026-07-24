@@ -305,11 +305,13 @@ class MNISTCNNModel:
         """Summarize class accuracy, common confusions, and mistaken samples."""
         y_true = np.asarray(y).reshape(-1)
         y_pred = np.asarray(self.predict(X)).reshape(-1)
+        y_prob = np.asarray(self.predict_proba(X))
         labels = np.asarray(self.label_encoder.classes_)
         self.label_encoder.transform(y_true)
         return self.analyze_predictions(
             y_true,
             y_pred,
+            y_prob=y_prob,
             labels=labels,
             class_names=class_names,
             top_k=top_k,
@@ -321,6 +323,7 @@ class MNISTCNNModel:
         y_true: Any,
         y_pred: Any,
         *,
+        y_prob: Any = None,
         labels: Optional[Sequence[Any]] = None,
         class_names: Optional[Sequence[str]] = None,
         top_k: int = 3,
@@ -335,6 +338,13 @@ class MNISTCNNModel:
         if labels is None:
             labels = np.unique(np.concatenate([y_true, y_pred]))
         labels = np.asarray(labels)
+        if y_prob is not None:
+            y_prob = np.asarray(y_prob, dtype=float)
+            expected_shape = (len(y_true), len(labels))
+            if y_prob.shape != expected_shape:
+                raise ValueError(
+                    f"y_prob must have shape {expected_shape}; received {y_prob.shape}"
+                )
         if class_names is not None and len(class_names) != len(labels):
             raise ValueError(
                 f"class_names must contain {len(labels)} names, one for each class label"
@@ -344,11 +354,20 @@ class MNISTCNNModel:
 
         names = [str(label) for label in labels] if class_names is None else list(class_names)
         per_class = []
-        for label, name in zip(labels, names):
+        for class_index, (label, name) in enumerate(zip(labels, names)):
             class_indices = np.where(y_true == label)[0]
             correct = int(np.sum(y_pred[class_indices] == label))
             total = int(len(class_indices))
             accuracy = 100.0 * correct / total if total else None
+            class_ece = None
+            if y_prob is not None:
+                from ...metrics import expected_calibration_error
+
+                binary_targets = (y_true == label).astype(int)
+                class_ece = expected_calibration_error(
+                    binary_targets,
+                    y_prob[:, class_index],
+                )
             per_class.append(
                 {
                     "label": label.item() if isinstance(label, np.generic) else label,
@@ -356,6 +375,7 @@ class MNISTCNNModel:
                     "correct": correct,
                     "total": total,
                     "accuracy": accuracy,
+                    "ece": class_ece,
                 }
             )
 
@@ -403,6 +423,11 @@ class MNISTCNNModel:
             for result in per_class:
                 accuracy_text = "N/A" if result["accuracy"] is None else f'{result["accuracy"]:.2f} %'
                 print(f'Accuracy of {result["name"]}: {accuracy_text}')
+                if result["ece"] is not None:
+                    print(
+                        f'ECE of {result["name"]} (one-vs-rest): '
+                        f'{result["ece"]:.4f} ({result["ece"] * 100:.2f} %)'
+                    )
             if hardest_class is not None:
                 print(
                     f'Hardest class: {hardest_class["name"]} '
