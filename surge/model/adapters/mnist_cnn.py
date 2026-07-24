@@ -67,6 +67,16 @@ class MNISTCNNAdapter(BaseModelAdapter):
             raise ValueError("Model must be fitted before predicting")
         return self._model.predict_proba(X)
 
+    def analyze_classification(
+        self,
+        X: Any,
+        y: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if self._model is None:
+            raise ValueError("Model must be fitted before analyzing classifications")
+        return self._model.analyze_classification(X, y, **kwargs)
+
     def save(self, filepath: Any) -> None:
         if self._model is None:
             raise ValueError("Model must be fitted before saving")

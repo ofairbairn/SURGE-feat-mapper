@@ -435,6 +435,21 @@ def test_mnist_cnn_fit_predict_and_roundtrip(tmp_path):
     assert probs.shape == (5, 10)
     assert np.allclose(probs.sum(axis=1), 1.0, atol=1e-5)
 
+    class_names = [f"class-{label}" for label in range(10, 20)]
+    analysis = adapter.analyze_classification(
+        X_val,
+        y_val,
+        class_names=class_names,
+        top_k=3,
+        print_report=False,
+    )
+    assert [result["label"] for result in analysis["per_class"]] == list(range(10, 20))
+    assert [result["name"] for result in analysis["per_class"]] == class_names
+    assert sum(result["total"] for result in analysis["per_class"]) == len(y_val)
+    assert analysis["hardest_class"] in analysis["per_class"]
+    assert len(analysis["top_confusions"]) <= 3
+    assert analysis["misclassified_indices"] == np.where(adapter.predict(X_val) != y_val)[0].tolist()
+
     path = tmp_path / "mnist_cnn_model.pt"
     adapter.save(path)
 

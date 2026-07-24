@@ -8,7 +8,7 @@ CNN used by the SURGE examples.  The corresponding adapter lives in
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
@@ -292,6 +292,104 @@ class MNISTCNNModel:
             logits = self._model(X_tensor)
             probs = torch.softmax(logits, dim=1).cpu().numpy()
         return probs
+
+    def analyze_classification(
+        self,
+        X: Any,
+        y: Any,
+        *,
+        class_names: Optional[Sequence[str]] = None,
+        top_k: int = 3,
+        print_report: bool = True,
+    ) -> dict[str, Any]:
+        """Summarize class accuracy, common confusions, and mistaken samples."""
+        y_true = np.asarray(y).reshape(-1)
+        y_pred = np.asarray(self.predict(X)).reshape(-1)
+        if len(y_true) != len(y_pred):
+            raise ValueError("X and y must contain the same number of samples")
+
+        labels = np.asarray(self.label_encoder.classes_)
+        self.label_encoder.transform(y_true)
+        if class_names is not None and len(class_names) != len(labels):
+            raise ValueError(
+                f"class_names must contain {len(labels)} names, one for each fitted class"
+            )
+        if top_k < 0:
+            raise ValueError("top_k must be non-negative")
+
+        names = [str(label) for label in labels] if class_names is None else list(class_names)
+        per_class = []
+        for label, name in zip(labels, names):
+            class_indices = np.where(y_true == label)[0]
+            correct = int(np.sum(y_pred[class_indices] == label))
+            total = int(len(class_indices))
+            accuracy = 100.0 * correct / total if total else None
+            per_class.append(
+                {
+                    "label": label.item() if isinstance(label, np.generic) else label,
+                    "name": name,
+                    "correct": correct,
+                    "total": total,
+                    "accuracy": accuracy,
+                }
+            )
+
+        observed_classes = [result for result in per_class if result["total"] > 0]
+        hardest_class = min(observed_classes, key=lambda result: result["accuracy"], default=None)
+
+        confusions = []
+        for true_label, true_name in zip(labels, names):
+            for predicted_label, predicted_name in zip(labels, names):
+                if predicted_label == true_label:
+                    continue
+                sample_indices = np.where(
+                    (y_true == true_label) & (y_pred == predicted_label)
+                )[0].tolist()
+                if sample_indices:
+                    confusions.append(
+                        {
+                            "true_label": (
+                                true_label.item()
+                                if isinstance(true_label, np.generic)
+                                else true_label
+                            ),
+                            "true_name": true_name,
+                            "predicted_label": (
+                                predicted_label.item()
+                                if isinstance(predicted_label, np.generic)
+                                else predicted_label
+                            ),
+                            "predicted_name": predicted_name,
+                            "count": len(sample_indices),
+                            "sample_indices": sample_indices,
+                        }
+                    )
+        confusions.sort(key=lambda result: (-result["count"], result["true_name"], result["predicted_name"]))
+        top_confusions = confusions[:top_k]
+        misclassified_indices = np.where(y_true != y_pred)[0].tolist()
+
+        analysis = {
+            "per_class": per_class,
+            "hardest_class": hardest_class,
+            "top_confusions": top_confusions,
+            "misclassified_indices": misclassified_indices,
+        }
+        if print_report:
+            for result in per_class:
+                accuracy_text = "N/A" if result["accuracy"] is None else f'{result["accuracy"]:.2f} %'
+                print(f'Accuracy of {result["name"]}: {accuracy_text}')
+            if hardest_class is not None:
+                print(
+                    f'Hardest class: {hardest_class["name"]} '
+                    f'({hardest_class["accuracy"]:.2f} %)'
+                )
+            for confusion in top_confusions:
+                print(
+                    f'Most confused: {confusion["true_name"]} -> '
+                    f'{confusion["predicted_name"]}: {confusion["count"]} samples '
+                    f'(indices: {confusion["sample_indices"]})'
+                )
+        return analysis
 
     def save(self, filepath: str | Path) -> None:
         if self._model is None:
