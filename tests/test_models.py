@@ -395,6 +395,34 @@ def test_mnist_cnn_registered():
     assert "pytorch.mnist_cnn" in MODEL_REGISTRY
 
 
+def test_mnist_cnn_analyzes_precomputed_predictions(capsys):
+    pytest.importorskip("torch")
+    from surge.model.backends.mnist_cnn import MNISTCNNModel
+
+    analysis = MNISTCNNModel.analyze_predictions(
+        y_true=np.array([0, 0, 0, 1, 1, 2, 2, 2]),
+        y_pred=np.array([0, 1, 1, 1, 0, 2, 1, 0]),
+        labels=[0, 1, 2],
+        class_names=["Alpha", "Beta", "Gamma"],
+        top_k=3,
+    )
+
+    assert analysis["per_class"][0]["accuracy"] == pytest.approx(100 / 3)
+    assert analysis["hardest_class"]["name"] == "Alpha"
+    assert analysis["top_confusions"][0] == {
+        "true_label": 0,
+        "true_name": "Alpha",
+        "predicted_label": 1,
+        "predicted_name": "Beta",
+        "count": 2,
+        "sample_indices": [1, 2],
+    }
+    assert analysis["misclassified_indices"] == [1, 2, 4, 6, 7]
+    output = capsys.readouterr().out
+    assert "Accuracy of Alpha: 33.33 %" in output
+    assert "Most confused: Alpha -> Beta: 2 samples" in output
+
+
 def test_mnist_cnn_fit_predict_and_roundtrip(tmp_path):
     pytest.importorskip("torch")
     rng = np.random.default_rng(42)

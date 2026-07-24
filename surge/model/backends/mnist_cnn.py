@@ -305,14 +305,39 @@ class MNISTCNNModel:
         """Summarize class accuracy, common confusions, and mistaken samples."""
         y_true = np.asarray(y).reshape(-1)
         y_pred = np.asarray(self.predict(X)).reshape(-1)
-        if len(y_true) != len(y_pred):
-            raise ValueError("X and y must contain the same number of samples")
-
         labels = np.asarray(self.label_encoder.classes_)
         self.label_encoder.transform(y_true)
+        return self.analyze_predictions(
+            y_true,
+            y_pred,
+            labels=labels,
+            class_names=class_names,
+            top_k=top_k,
+            print_report=print_report,
+        )
+
+    @staticmethod
+    def analyze_predictions(
+        y_true: Any,
+        y_pred: Any,
+        *,
+        labels: Optional[Sequence[Any]] = None,
+        class_names: Optional[Sequence[str]] = None,
+        top_k: int = 3,
+        print_report: bool = True,
+    ) -> dict[str, Any]:
+        """Summarize labels and predictions, including mistaken sample indices."""
+        y_true = np.asarray(y_true).reshape(-1)
+        y_pred = np.asarray(y_pred).reshape(-1)
+        if len(y_true) != len(y_pred):
+            raise ValueError("y_true and y_pred must contain the same number of samples")
+
+        if labels is None:
+            labels = np.unique(np.concatenate([y_true, y_pred]))
+        labels = np.asarray(labels)
         if class_names is not None and len(class_names) != len(labels):
             raise ValueError(
-                f"class_names must contain {len(labels)} names, one for each fitted class"
+                f"class_names must contain {len(labels)} names, one for each class label"
             )
         if top_k < 0:
             raise ValueError("top_k must be non-negative")
