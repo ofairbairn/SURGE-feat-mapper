@@ -149,8 +149,9 @@ def plot_training_dashboard(
     """Training dashboard.
 
     Classification-style histories with validation accuracy render as a
-    two-panel figure. Unsupervised/regression histories without validation
-    accuracy render as a single loss-only figure.
+    three-panel figure: linear loss, validation accuracy, and log-scaled loss.
+    Unsupervised/regression histories without validation accuracy render as a
+    single loss-only figure.
     """
     if not MPL_AVAILABLE:
         raise ImportError("matplotlib is required for plot_training_dashboard")
@@ -165,12 +166,14 @@ def plot_training_dashboard(
     )
 
     if has_val_accuracy:
-        fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+        fig, axes = plt.subplots(3, 1, figsize=(9, 10), sharex=True)
         loss_ax = axes[0]
         metric_ax = axes[1]
+        log_loss_ax = axes[2]
     else:
         fig, loss_ax = plt.subplots(1, 1, figsize=(9, 4.8))
         metric_ax = None
+        log_loss_ax = None
     suptitle = "Training dashboard"
     if model_name:
         suptitle = f"{suptitle} — {model_name}"
@@ -217,11 +220,36 @@ def plot_training_dashboard(
             color="goldenrod",
             linewidth=2.0,
         )
-        metric_ax.set_ylabel(metric_name.replace("_", " "))
+        metric_ax.set_ylabel("validation accuracy")
+        metric_ax.set_title("Validation accuracy")
         metric_ax.set_ylim(0.0, 1.0)
         metric_ax.set_xlabel("epoch")
         metric_ax.legend(loc="best")
         metric_ax.grid(True, alpha=0.3)
+
+        if log_loss_ax is not None:
+            log_loss_ax.plot(epochs, train_loss, label="train_loss", color="C0")
+            log_loss_ax.plot(
+                epochs,
+                _rolling_mean(train_loss),
+                label="train_loss_rolling_mean",
+                color="indianred",
+                linewidth=2.0,
+            )
+            if any(v is not None for v in val_loss):
+                log_loss_ax.plot(
+                    epochs,
+                    [float(v) if v is not None else np.nan for v in val_loss],
+                    label="val_loss",
+                    color="darkgreen",
+                    linewidth=1.6,
+                )
+            log_loss_ax.set_yscale("log")
+            log_loss_ax.set_ylabel("log loss")
+            log_loss_ax.set_xlabel("epoch")
+            log_loss_ax.set_title("Log-scaled loss")
+            log_loss_ax.legend(loc="best")
+            log_loss_ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
     if save_path is not None:

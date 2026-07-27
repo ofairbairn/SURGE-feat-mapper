@@ -65,9 +65,11 @@ def test_plot_training_dashboard(tmp_path: Path):
         save_path=tmp_path / "dash.png",
     )
     assert fig is not None
-    assert len(fig.axes) == 2
+    assert len(fig.axes) == 3
     assert fig.axes[0].get_ylabel() == "loss"
     assert fig.axes[1].get_ylabel() == "validation accuracy"
+    assert fig.axes[2].get_ylabel() == "log loss"
+    assert fig.axes[2].get_yscale() == "log"
     assert (tmp_path / "dash.png").is_file()
 
 
