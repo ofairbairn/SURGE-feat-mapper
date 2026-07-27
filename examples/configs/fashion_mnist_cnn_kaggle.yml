@@ -36,7 +36,7 @@ workflow:
         input_size: [28, 28]
         input_channels: 1
         hidden_channels: [32, 64]
-        epochs: 20
+        epochs: 500
         batch_size: 32
         learning_rate: 0.001
         device: cpu
