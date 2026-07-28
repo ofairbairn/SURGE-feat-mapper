@@ -553,8 +553,13 @@ class SurrogateEngine:
             y_pred_test = None
             pred_test_time = None
 
-        if self._scalers.output_scaler is not None:
-            scaler = self._scalers.output_scaler
+        prediction_scaler = (
+            self._scalers.input_scaler
+            if self.config.task_type == "unsupervised"
+            else self._scalers.output_scaler
+        )
+        if prediction_scaler is not None:
+            scaler = prediction_scaler
             y_pred_train = scaler.inverse_transform(y_pred_train)
             y_pred_val = scaler.inverse_transform(y_pred_val)
             if y_pred_test is not None:

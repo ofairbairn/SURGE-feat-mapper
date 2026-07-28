@@ -164,9 +164,11 @@ def run_surrogate_workflow(
     try:
         print("SURGE workflow started.", flush=True)
 
+        model_configs = _effective_model_configs(spec)
         # Total steps: 1 load dataset, 1 prepare, then per model: 1 (HPO if enabled) + 1 (train)
         n_model_steps = sum(
-            2 if (c.hpo and c.hpo.enabled and c.hpo.search_space) else 1 for c in spec.models
+            2 if (c.hpo and c.hpo.enabled and c.hpo.search_space) else 1
+            for c in model_configs
         )
         total_steps = 2 + n_model_steps
         step = 0
@@ -332,7 +334,7 @@ def run_surrogate_workflow(
         workflow_metrics: Dict[str, Any] = {}
         workflow_models: List[Dict[str, Any]] = []
 
-        for model_cfg in spec.models:
+        for model_cfg in model_configs:
             if model_cfg.key not in engine.registry:
                 LOGGER.warning("Skipping model '%s' because it is not registered.", model_cfg.key)
                 continue
@@ -462,6 +464,44 @@ def _default_run_tag(file_path: Optional[Path]) -> str:
     return f"{prefix}_{timestamp}"
 
 
+def _effective_model_configs(spec: SurrogateWorkflowSpec) -> List[ModelConfig]:
+    configs = list(spec.models)
+    if spec.task_type != "unsupervised":
+        return configs
+
+    ladder_order = [str(stage).strip().lower() for stage in spec.unsupervised_ladder_order]
+    if "pca" not in ladder_order:
+        return configs
+
+    pca_keys = {"pca", "sklearn.pca"}
+    explicit_pca = [config for config in configs if config.key.lower() in pca_keys]
+    non_pca = [config for config in configs if config.key.lower() not in pca_keys]
+    if explicit_pca:
+        return [*explicit_pca, *non_pca]
+
+    latent_dim = 8
+    for config in configs:
+        candidate = config.params.get("latent_dim")
+        if candidate is None:
+            continue
+        try:
+            latent_dim = max(1, int(candidate))
+            break
+        except (TypeError, ValueError):
+            continue
+
+    baseline = ModelConfig(
+        key="sklearn.pca",
+        name="PCA",
+        params={
+            "n_components": latent_dim,
+            "max_components": 32,
+            "random_state": spec.seed,
+        },
+    )
+    return [baseline, *configs]
+
+
 def _model_spec_from_config(config: ModelConfig) -> ModelSpec:
     return ModelSpec(
         key=config.key,
@@ -545,6 +585,7 @@ def _persist_model_artifacts(
         artifact_extra["checkpoints_dir"] = posix_str(ck_dir.resolve())
 
     entry: Dict[str, Any] = {
+        "key": result.spec.key,
         "name": model_name,
         "backend": result.adapter.backend,
         "params": result.spec.params,

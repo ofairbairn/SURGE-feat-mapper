@@ -227,6 +227,13 @@ except Exception:
     pass
 
 try:
+    from .adapters.pca import PCAAdapter
+
+    register_model(PCAAdapter, key='sklearn.pca', aliases=['pca'])
+except Exception:
+    pass
+
+try:
     from .adapters.fno2d import FNO2dAdapter
     from .pytorch import PYTORCH_AVAILABLE as _PTA13
 

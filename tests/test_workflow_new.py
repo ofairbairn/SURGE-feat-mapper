@@ -15,6 +15,31 @@ import pandas as pd
 
 from surge.dataset import SurrogateDataset
 from surge.engine import EngineRunConfig, ModelSpec, SurrogateEngine
+from surge.workflow.run import _effective_model_configs
+from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
+
+
+class _IdentityReconstructionAdapter:
+    backend = "sklearn"
+
+    def fit(self, X, y) -> None:
+        pass
+
+    def predict(self, X):
+        return np.asarray(X)
+
+    def mark_fitted(self) -> None:
+        pass
+
+
+class _IdentityRegistry:
+    def __contains__(self, key: str) -> bool:
+        return key == "test.identity_reconstruction"
+
+    def create(self, key: str, **params):
+        assert key == "test.identity_reconstruction"
+        assert not params
+        return _IdentityReconstructionAdapter()
 
 
 def _make_dummy_dataframe(n_rows: int = 100) -> pd.DataFrame:
@@ -109,4 +134,49 @@ class TestSurrogateEngine:
         assert "train" in result.predictions
         assert result.predictions["train"]["y_pred"].shape == result.predictions["train"]["y_true"].shape
         assert engine.results  # run() should record results internally
+
+    def test_unsupervised_reconstructions_are_inverse_transformed_with_input_scaler(self) -> None:
+        df = _make_dummy_dataframe(120)[["input_a", "input_b", "input_c"]]
+        config = EngineRunConfig(
+            test_fraction=0.2,
+            val_fraction=0.2,
+            standardize_inputs=True,
+            standardize_outputs=False,
+            task_type="unsupervised",
+            random_state=0,
+        )
+        engine = SurrogateEngine(registry=_IdentityRegistry(), run_config=config)
+        columns = list(df.columns)
+        engine.configure_dataframe(df, columns, columns)
+
+        result = engine.run([ModelSpec(key="test.identity_reconstruction")])[0]
+
+        assert result.train_metrics["recon_mse"] < 1e-30
+        assert result.val_metrics["recon_mse"] < 1e-30
+        assert result.test_metrics is not None
+        assert result.test_metrics["recon_mse"] < 1e-30
+
+
+def test_unsupervised_workflow_prepends_pca_baseline() -> None:
+    spec = SurrogateWorkflowSpec(
+        dataset_path="unused.csv",
+        task_type="unsupervised",
+        seed=7,
+        models=[
+            ModelConfig(
+                key="pytorch.owen_vae",
+                name="Owen_VAE",
+                params={"latent_dim": 5},
+            )
+        ],
+    )
+
+    configs = _effective_model_configs(spec)
+
+    assert [config.key for config in configs] == ["sklearn.pca", "pytorch.owen_vae"]
+    assert configs[0].params == {
+        "n_components": 5,
+        "max_components": 32,
+        "random_state": 7,
+    }
 

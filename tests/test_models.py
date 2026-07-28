@@ -678,6 +678,24 @@ def test_cgan_fit_predict():
     assert np.isfinite(preds).all()
 
 
+def test_pca_registered_and_round_trip(unsup_data, tmp_path):
+    assert "sklearn.pca" in MODEL_REGISTRY
+    X_tr, X_te = unsup_data
+    adapter = MODEL_REGISTRY.create("sklearn.pca", n_components=4, random_state=0)
+    adapter.fit(X_tr)
+
+    latent = adapter.encode(X_te)
+    reconstruction = adapter.predict(X_te)
+    assert latent.shape == (len(X_te), 4)
+    np.testing.assert_allclose(reconstruction, adapter.decode(latent))
+
+    save_path = tmp_path / "pca.joblib"
+    adapter.save(save_path)
+    loaded = MODEL_REGISTRY.create("sklearn.pca")
+    loaded.load(save_path)
+    np.testing.assert_allclose(reconstruction, loaded.predict(X_te))
+
+
 def test_autoencoder_registered():
     pytest.importorskip("torch")
     assert "pytorch.autoencoder" in MODEL_REGISTRY
