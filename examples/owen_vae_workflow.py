@@ -1,4 +1,4 @@
-"""Run SURGE workflow for owen's vae on UCI White data."""
+"""Run SURGE workflow for owen's vae on UCI White data. Now changed to pca."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ DEFAULT_CONFIG = Path("examples/configs/owen_vae_white.yml")
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Run SURGE workflow for Owen's VAE."
+		description="Run SURGE workflow for PCA."
 	)
 	parser.add_argument(
 		"--config",

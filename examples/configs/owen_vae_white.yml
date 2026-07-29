@@ -13,17 +13,12 @@ workflow:
     vae_min_recon_improvement: 0.10
 
   models:
-    - key: pytorch.owen_vae
-      name: Owen_VAE
+    - key: sklearn.pca
+      name: pca
       params:
-        latent_dim: 8
-        hidden_dims: [128, 64]
-        n_epochs: 150
-        batch_size: 128
-        beta: 1.0
-        learning_rate: 0.001
-        device: cpu
-        verbose: true
+        n_components: 8
+        svd_solver: auto
+        whiten: true
 
 viz:
   include_hpo: false
