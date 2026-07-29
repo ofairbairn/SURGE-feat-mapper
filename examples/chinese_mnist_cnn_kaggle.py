@@ -18,7 +18,7 @@ DEFAULT_CONFIG = Path("examples/configs/chinese_mnist_cnn_kaggle.yaml")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run Chinese-MNIST classification."
+        description="Run Chinese-MNIST through pca."
     )
     parser.add_argument(
         "--config",
