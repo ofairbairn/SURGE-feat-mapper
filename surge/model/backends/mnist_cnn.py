@@ -41,6 +41,7 @@ class _MNISTCNN(nn.Module if TORCH_AVAILABLE else object):
         num_classes: int = 10,
         input_channels: int = 1,
         hidden_channels: tuple[int, ...] = (16, 32),
+        dropout2d_prob: float = 0.2,
     ) -> None:
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for MNISTCNNModel. Install torch first.")
@@ -48,8 +49,11 @@ class _MNISTCNN(nn.Module if TORCH_AVAILABLE else object):
             raise ValueError("hidden_channels must have at least two entries")
         super().__init__()
         self.conv1 = nn.Conv2d(input_channels, hidden_channels[0], kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(hidden_channels[0])
         self.conv2 = nn.Conv2d(hidden_channels[0], hidden_channels[1], kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(hidden_channels[1])
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.dropout2d = nn.Dropout2d(p=float(dropout2d_prob))
 
         # Adaptive pooling makes the model input-size agnostic.
         self.adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
@@ -59,10 +63,12 @@ class _MNISTCNN(nn.Module if TORCH_AVAILABLE else object):
         self.fc2 = nn.Linear(64, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[name-defined]
-        x = torch.relu(self.conv1(x))
+        x = torch.relu(self.bn1(self.conv1(x)))
         x = self.pool(x)
-        x = torch.relu(self.conv2(x))
+        x = self.dropout2d(x)
+        x = torch.relu(self.bn2(self.conv2(x)))
         x = self.pool(x)
+        x = self.dropout2d(x)
         x = self.adaptive_pool(x)
         x = x.flatten(1)
         x = torch.relu(self.fc1(x))
@@ -81,6 +87,15 @@ class MNISTCNNModel:
         epochs: int = 10,
         batch_size: int = 32,
         learning_rate: float = 1e-3,
+        weight_decay: float = 0.01,
+        dropout2d: float = 0.2,
+        use_lr_scheduler: bool = True,
+        lr_scheduler_factor: float = 0.5,
+        lr_scheduler_patience: int = 2,
+        lr_scheduler_min_lr: float = 1e-6,
+        early_stopping: bool = True,
+        early_stopping_patience: int = 5,
+        early_stopping_min_delta: float = 1e-4,
         device: Optional[str] = None,
         random_state: int = 42,
         verbose: bool = False,
@@ -99,6 +114,15 @@ class MNISTCNNModel:
         self.epochs = int(epochs)
         self.batch_size = int(batch_size)
         self.learning_rate = float(learning_rate)
+        self.weight_decay = float(weight_decay)
+        self.dropout2d = float(dropout2d)
+        self.use_lr_scheduler = bool(use_lr_scheduler)
+        self.lr_scheduler_factor = float(lr_scheduler_factor)
+        self.lr_scheduler_patience = int(lr_scheduler_patience)
+        self.lr_scheduler_min_lr = float(lr_scheduler_min_lr)
+        self.early_stopping = bool(early_stopping)
+        self.early_stopping_patience = int(early_stopping_patience)
+        self.early_stopping_min_delta = float(early_stopping_min_delta)
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.random_state = int(random_state)
         self.verbose = verbose
@@ -113,6 +137,7 @@ class MNISTCNNModel:
             num_classes=num_classes,
             input_channels=self.input_channels,
             hidden_channels=self.hidden_channels,
+            dropout2d_prob=self.dropout2d,
         )
 
     def _prepare_features(self, X: Any) -> "torch.Tensor":  # type: ignore[name-defined]
@@ -178,14 +203,23 @@ class MNISTCNNModel:
             y_val_encoded = None
 
         criterion = nn.CrossEntropyLoss()
+        learning_rate = float(kwargs.get("learning_rate", self.learning_rate))
+        weight_decay = float(kwargs.get("weight_decay", self.weight_decay))
         optimizer = optim.AdamW( #switched optimizer to adamw for weight decay of 0.01
             self._model.parameters(),
-            lr=float(kwargs.get("learning_rate", self.learning_rate)),
-            weight_decay=0.01,
+            lr=learning_rate,
+            weight_decay=weight_decay,
         )
         batch_size = int(kwargs.get("batch_size", self.batch_size))
         epochs = int(kwargs.get("epochs", self.epochs))
         show_progress = bool(kwargs.get("show_progress", self.verbose))
+        use_lr_scheduler = bool(kwargs.get("use_lr_scheduler", self.use_lr_scheduler))
+        lr_scheduler_factor = float(kwargs.get("lr_scheduler_factor", self.lr_scheduler_factor))
+        lr_scheduler_patience = max(1, int(kwargs.get("lr_scheduler_patience", self.lr_scheduler_patience)))
+        lr_scheduler_min_lr = float(kwargs.get("lr_scheduler_min_lr", self.lr_scheduler_min_lr))
+        use_early_stopping = bool(kwargs.get("early_stopping", self.early_stopping))
+        early_stopping_patience = max(1, int(kwargs.get("early_stopping_patience", self.early_stopping_patience)))
+        early_stopping_min_delta = float(kwargs.get("early_stopping_min_delta", self.early_stopping_min_delta))
 
         X_tensor = self._prepare_features(X).to(self.device)
         y_tensor = torch.from_numpy(np.asarray(y_encoded, dtype=np.int64)).to(self.device)
@@ -200,8 +234,19 @@ class MNISTCNNModel:
         else:
             val_loader = None
 
+        scheduler = None
+        if val_loader is not None and use_lr_scheduler:
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="min",
+                factor=lr_scheduler_factor,
+                patience=lr_scheduler_patience,
+                min_lr=lr_scheduler_min_lr,
+            )
+
         best_state = None
         best_val_loss = float("inf")
+        no_improve_epochs = 0
         self.training_history = []
         self._model.train()
         epoch_iterator = (
@@ -243,10 +288,18 @@ class MNISTCNNModel:
                         total += int(yb.size(0))
                 val_loss = float(val_loss_accum / max(1, val_count))
                 val_accuracy = float(correct / max(1, total))
-                if val_loss < best_val_loss:
+                if val_loss < (best_val_loss - early_stopping_min_delta):
                     best_val_loss = val_loss
                     best_state = {k: v.detach().cpu().clone() for k, v in self._model.state_dict().items()}
+                    no_improve_epochs = 0
+                else:
+                    no_improve_epochs += 1
                 self._model.train()
+
+            if scheduler is not None and val_loss is not None:
+                scheduler.step(val_loss)
+
+            current_lr = float(optimizer.param_groups[0]["lr"])
 
             self.training_history.append(
                 {
@@ -254,6 +307,7 @@ class MNISTCNNModel:
                     "train_loss": avg_train_loss,
                     "val_accuracy": val_accuracy,
                     "val_loss": val_loss,
+                    "learning_rate": current_lr,
                 }
             )
 
@@ -263,7 +317,15 @@ class MNISTCNNModel:
                     progress_metrics["val_loss"] = f"{val_loss:.4f}"
                 if val_accuracy is not None:
                     progress_metrics["val_acc"] = f"{val_accuracy * 100:.2f}%"
+                progress_metrics["lr"] = f"{current_lr:.2e}"
                 epoch_iterator.set_postfix(progress_metrics)
+
+            if (
+                val_loader is not None
+                and use_early_stopping
+                and no_improve_epochs >= early_stopping_patience
+            ):
+                break
 
         if best_state is not None:
             self._model.load_state_dict(best_state)
@@ -456,6 +518,15 @@ class MNISTCNNModel:
                 "epochs": self.epochs,
                 "batch_size": self.batch_size,
                 "learning_rate": self.learning_rate,
+                "weight_decay": self.weight_decay,
+                "dropout2d": self.dropout2d,
+                "use_lr_scheduler": self.use_lr_scheduler,
+                "lr_scheduler_factor": self.lr_scheduler_factor,
+                "lr_scheduler_patience": self.lr_scheduler_patience,
+                "lr_scheduler_min_lr": self.lr_scheduler_min_lr,
+                "early_stopping": self.early_stopping,
+                "early_stopping_patience": self.early_stopping_patience,
+                "early_stopping_min_delta": self.early_stopping_min_delta,
                 "device": str(self.device),
                 "random_state": self.random_state,
             },
@@ -475,6 +546,15 @@ class MNISTCNNModel:
         hidden_channels = params.get("hidden_channels")
         if hidden_channels is not None:
             self.hidden_channels = tuple(int(h) for h in hidden_channels)
+        self.weight_decay = float(params.get("weight_decay", self.weight_decay))
+        self.dropout2d = float(params.get("dropout2d", self.dropout2d))
+        self.use_lr_scheduler = bool(params.get("use_lr_scheduler", self.use_lr_scheduler))
+        self.lr_scheduler_factor = float(params.get("lr_scheduler_factor", self.lr_scheduler_factor))
+        self.lr_scheduler_patience = int(params.get("lr_scheduler_patience", self.lr_scheduler_patience))
+        self.lr_scheduler_min_lr = float(params.get("lr_scheduler_min_lr", self.lr_scheduler_min_lr))
+        self.early_stopping = bool(params.get("early_stopping", self.early_stopping))
+        self.early_stopping_patience = int(params.get("early_stopping_patience", self.early_stopping_patience))
+        self.early_stopping_min_delta = float(params.get("early_stopping_min_delta", self.early_stopping_min_delta))
 
         num_classes = int(payload.get("num_classes", params.get("num_classes", 10)))
         self._model = self._build_model(num_classes=num_classes)

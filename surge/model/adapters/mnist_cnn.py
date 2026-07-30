@@ -33,6 +33,15 @@ class MNISTCNNAdapter(BaseModelAdapter):
         "epochs": 10,
         "batch_size": 32,
         "learning_rate": 1e-3,
+        "weight_decay": 0.01,
+        "dropout2d": 0.2,
+        "use_lr_scheduler": True,
+        "lr_scheduler_factor": 0.5,
+        "lr_scheduler_patience": 2,
+        "lr_scheduler_min_lr": 1e-6,
+        "early_stopping": True,
+        "early_stopping_patience": 5,
+        "early_stopping_min_delta": 1e-4,
         "random_state": 42,
     }
 
