@@ -140,23 +140,42 @@ def expected_calibration_error(
     y_true,
     y_prob,
     *,
+    labels=None,
     n_bins: int = 10,
     strategy: str = "uniform",
 ) -> float:
     """Multiclass-safe reliability ECE: bin by prediction confidence (max prob).
 
     Binary: ``y_prob`` may be ``(n,)`` scores for the positive class.
-    Multiclass: ``y_prob`` is ``(n, n_classes)``.
+    Multiclass: ``y_prob`` is ``(n, n_classes)`` and ``labels``, when
+    provided, gives the class represented by each probability column. Without
+    ``labels``, columns retain the legacy assumption of labels ``0..C-1``.
     """
-    y_true = np.asarray(y_true).astype(int, copy=False)
+    y_true = np.asarray(y_true).reshape(-1)
     y_prob = np.asarray(y_prob, dtype=float)
+    if len(y_true) != len(y_prob):
+        raise ValueError("y_true and y_prob must contain the same number of samples")
     if y_prob.ndim == 1:
         conf = np.clip(y_prob, 1e-6, 1.0 - 1e-6)
         correct = (y_true == 1).astype(float)
-    else:
-        pred = np.argmax(y_prob, axis=1)
+    elif y_prob.ndim == 2:
+        pred_indices = np.argmax(y_prob, axis=1)
+        if labels is None:
+            pred = pred_indices
+        else:
+            labels_arr = np.asarray(labels).reshape(-1)
+            if len(labels_arr) != y_prob.shape[1]:
+                raise ValueError(
+                    "labels must contain one entry for each y_prob column "
+                    f"({y_prob.shape[1]} required, {len(labels_arr)} received)"
+                )
+            if len(np.unique(labels_arr)) != len(labels_arr):
+                raise ValueError("labels entries must be unique")
+            pred = labels_arr[pred_indices]
         conf = np.clip(y_prob.max(axis=1), 1e-6, 1.0 - 1e-6)
         correct = (pred == y_true).astype(float)
+    else:
+        raise ValueError("y_prob must be a one- or two-dimensional array")
 
     if strategy not in ("uniform", "quantile"):
         raise ValueError("strategy must be 'uniform' or 'quantile'")

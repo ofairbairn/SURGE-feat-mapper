@@ -465,6 +465,7 @@ def test_mnist_cnn_fit_predict_and_roundtrip(tmp_path):
     )
     adapter.fit(X_train, y_train, X_val=X_val, y_val=y_val)
 
+    assert adapter.class_labels == list(range(10, 20))
     assert hasattr(adapter, "training_history")
     assert isinstance(adapter.training_history, list)
     assert len(adapter.training_history) > 0
@@ -531,7 +532,7 @@ def test_mnist_cnn_supports_channel_last_and_custom_input_size():
         "pytorch.mnist_cnn",
         input_size=(64, 64),
         input_channels=1,
-        hidden_channels=(16, 32),
+        hidden_channels=(16, 32, 64),
         epochs=2,
         batch_size=6,
         learning_rate=1e-3,

@@ -530,7 +530,9 @@ class SurrogateEngine:
         y_prob_train = None
         y_prob_val = None
         y_prob_test = None
+        class_labels = None
         if self.config.task_type == "classification" and hasattr(adapter, "predict_proba"):
+            class_labels = getattr(adapter, "class_labels", None)
             try:
                 y_prob_train = np.asarray(adapter.predict_proba(proc.X_train))
             except Exception:
@@ -620,10 +622,25 @@ class SurrogateEngine:
                     spec.key,
                 )
 
-        metrics_train = self._compute_metrics(raw.y_train, y_pred_train, y_prob=y_prob_train)
-        metrics_val = self._compute_metrics(raw.y_val, y_pred_val, y_prob=y_prob_val)
+        metrics_train = self._compute_metrics(
+            raw.y_train,
+            y_pred_train,
+            y_prob=y_prob_train,
+            class_labels=class_labels,
+        )
+        metrics_val = self._compute_metrics(
+            raw.y_val,
+            y_pred_val,
+            y_prob=y_prob_val,
+            class_labels=class_labels,
+        )
         metrics_test = (
-            self._compute_metrics(raw.y_test, y_pred_test, y_prob=y_prob_test)
+            self._compute_metrics(
+                raw.y_test,
+                y_pred_test,
+                y_prob=y_prob_test,
+                class_labels=class_labels,
+            )
             if raw.y_test is not None and y_pred_test is not None
             else None
         )
@@ -680,7 +697,14 @@ class SurrogateEngine:
     # ------------------------------------------------------------------
     # Metrics helpers
     # ------------------------------------------------------------------
-    def _compute_metrics(self, y_true, y_pred, *, y_prob: Any = None) -> Dict[str, float]:
+    def _compute_metrics(
+        self,
+        y_true,
+        y_pred,
+        *,
+        y_prob: Any = None,
+        class_labels: Any = None,
+    ) -> Dict[str, float]:
         if y_true is None or y_pred is None:
             return {}
         y_true = np.asarray(y_true)
@@ -745,8 +769,16 @@ class SurrogateEngine:
 
                 if y_prob is not None:
                     y_prob_arr = np.asarray(y_prob)
-                    metrics["log_loss"] = surge_log_loss(y_t, y_prob_arr)
-                    metrics["ece"] = surge_expected_calibration_error(y_t, y_prob_arr)
+                    metrics["log_loss"] = surge_log_loss(
+                        y_t,
+                        y_prob_arr,
+                        labels=class_labels,
+                    )
+                    metrics["ece"] = surge_expected_calibration_error(
+                        y_t,
+                        y_prob_arr,
+                        labels=class_labels,
+                    )
 
                     if y_prob_arr.ndim == 1:
                         metrics["auroc"] = surge_auroc(y_t, y_prob_arr)
@@ -759,6 +791,7 @@ class SurrogateEngine:
                                     y_t,
                                     y_prob_arr,
                                     k=top_k,
+                                    labels=class_labels,
                                 )
             except Exception:
                 # If metrics are unavailable or shapes are unexpected, skip.

@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 class _MNISTCNN(nn.Module if TORCH_AVAILABLE else object):
-    """Small convolutional network that supports variable input spatial sizes."""
+    """Small convolutional network with configurable depth and input size."""
 
     def __init__(
         self,
@@ -45,13 +45,30 @@ class _MNISTCNN(nn.Module if TORCH_AVAILABLE else object):
     ) -> None:
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is required for MNISTCNNModel. Install torch first.")
-        if len(hidden_channels) < 2:
-            raise ValueError("hidden_channels must have at least two entries")
+        if not hidden_channels:
+            raise ValueError("hidden_channels must contain at least one entry")
+        if any(int(channels) <= 0 for channels in hidden_channels):
+            raise ValueError("hidden_channels entries must be positive integers")
         super().__init__()
         self.conv1 = nn.Conv2d(input_channels, hidden_channels[0], kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(hidden_channels[0])
-        self.conv2 = nn.Conv2d(hidden_channels[0], hidden_channels[1], kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(hidden_channels[1])
+
+        # Keep the original first two layer names so existing two-layer model
+        # checkpoints retain the same state-dict keys.
+        if len(hidden_channels) >= 2:
+            self.conv2 = nn.Conv2d(hidden_channels[0], hidden_channels[1], kernel_size=3, padding=1)
+            self.bn2 = nn.BatchNorm2d(hidden_channels[1])
+        else:
+            self.conv2 = None
+            self.bn2 = None
+
+        self.extra_blocks = nn.ModuleList(
+            nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels),
+            )
+            for in_channels, out_channels in zip(hidden_channels[1:-1], hidden_channels[2:])
+        )
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.dropout2d = nn.Dropout2d(p=float(dropout2d_prob))
 
@@ -62,13 +79,19 @@ class _MNISTCNN(nn.Module if TORCH_AVAILABLE else object):
         self.fc1 = nn.Linear(fc_in, 64)
         self.fc2 = nn.Linear(64, num_classes)
 
+    def _finish_conv_block(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[name-defined]
+        # Stop spatial downsampling at 1x1 so deep configurations remain valid
+        # even for 28x28 inputs.
+        if x.shape[-2] >= 2 and x.shape[-1] >= 2:
+            x = self.pool(x)
+        return self.dropout2d(x)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore[name-defined]
-        x = torch.relu(self.bn1(self.conv1(x)))
-        x = self.pool(x)
-        x = self.dropout2d(x)
-        x = torch.relu(self.bn2(self.conv2(x)))
-        x = self.pool(x)
-        x = self.dropout2d(x)
+        x = self._finish_conv_block(torch.relu(self.bn1(self.conv1(x))))
+        if self.conv2 is not None and self.bn2 is not None:
+            x = self._finish_conv_block(torch.relu(self.bn2(self.conv2(x))))
+        for block in self.extra_blocks:
+            x = self._finish_conv_block(torch.relu(block(x)))
         x = self.adaptive_pool(x)
         x = x.flatten(1)
         x = torch.relu(self.fc1(x))

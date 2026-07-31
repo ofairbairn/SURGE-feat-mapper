@@ -122,6 +122,28 @@ class BaseModelAdapter(ABC):
     def get_estimator(self) -> Any:
         return self._model
 
+    @property
+    def class_labels(self) -> Optional[List[Any]]:
+        """Ordered labels corresponding to columns returned by ``predict_proba``.
+
+        Backends commonly expose this order either directly through
+        ``classes_`` or through an internal label encoder.  Returning it from
+        the adapter gives workflow metrics a backend-independent contract.
+        """
+        estimator = self._model
+        if estimator is None:
+            return None
+
+        classes = getattr(estimator, "classes_", None)
+        if classes is None:
+            label_encoder = getattr(estimator, "label_encoder", None)
+            classes = getattr(label_encoder, "classes_", None)
+        if classes is None:
+            classes = getattr(estimator, "_class_labels", None)
+        if classes is None:
+            return None
+        return list(classes)
+
     def update_estimator(self, estimator: Any) -> "BaseModelAdapter":
         self._model = estimator
         return self

@@ -51,3 +51,30 @@ def test_expected_calibration_error_perfect():
     y_prob = np.array([0.05] * 50 + [0.95] * 50)
     ece = expected_calibration_error(y_true, y_prob, n_bins=10)
     assert ece < 0.05
+
+
+def test_expected_calibration_error_uses_noncontiguous_probability_labels():
+    # The evaluated split intentionally omits labels 1 and 2. Inferring the
+    # mapping from np.unique(y_true) would therefore be incorrect.
+    labels = np.array([0, 1, 2, 4])
+    y_true = np.array([0, 4, 4])
+    y_prob = np.array(
+        [
+            [0.99, 0.005, 0.003, 0.002],
+            [0.002, 0.003, 0.005, 0.99],
+            [0.001, 0.004, 0.005, 0.99],
+        ]
+    )
+
+    ece = expected_calibration_error(y_true, y_prob, labels=labels)
+
+    assert ece == pytest.approx(0.01)
+
+
+def test_expected_calibration_error_rejects_misaligned_labels():
+    with pytest.raises(ValueError, match="one entry for each y_prob column"):
+        expected_calibration_error(
+            np.array([0, 2]),
+            np.array([[0.9, 0.1], [0.1, 0.9]]),
+            labels=[0, 1, 2],
+        )

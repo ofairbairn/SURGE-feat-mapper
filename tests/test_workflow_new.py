@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from surge.dataset import SurrogateDataset
 from surge.engine import EngineRunConfig, ModelSpec, SurrogateEngine
@@ -134,6 +135,31 @@ class TestSurrogateEngine:
         assert "train" in result.predictions
         assert result.predictions["train"]["y_pred"].shape == result.predictions["train"]["y_true"].shape
         assert engine.results  # run() should record results internally
+
+    def test_classification_metrics_respect_probability_class_order(self) -> None:
+        engine = SurrogateEngine(
+            run_config=EngineRunConfig(task_type="classification")
+        )
+        labels = np.array([0, 1, 2, 4])
+        y_true = np.array([0, 4, 4])
+        y_pred = y_true.copy()
+        y_prob = np.array(
+            [
+                [0.99, 0.005, 0.003, 0.002],
+                [0.002, 0.003, 0.005, 0.99],
+                [0.001, 0.004, 0.005, 0.99],
+            ]
+        )
+
+        metrics = engine._compute_metrics(
+            y_true,
+            y_pred,
+            y_prob=y_prob,
+            class_labels=labels,
+        )
+
+        assert metrics["accuracy"] == pytest.approx(1.0)
+        assert metrics["ece"] == pytest.approx(0.01)
 
     def test_unsupervised_reconstructions_are_inverse_transformed_with_input_scaler(self) -> None:
         df = _make_dummy_dataframe(120)[["input_a", "input_b", "input_c"]]

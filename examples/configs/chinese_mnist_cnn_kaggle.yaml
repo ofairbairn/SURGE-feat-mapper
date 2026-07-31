@@ -17,7 +17,7 @@ workflow:
   dataset_format: csv
   metadata_overrides:
     outputs: [value]
-  task_type: unsupervised
+  task_type: classification
 
   test_fraction: 0.2
   val_fraction: 0.1
@@ -31,10 +31,24 @@ workflow:
   predictions_format: parquet
 
   models:
-    - key: sklearn.pca
-      name: PCA
+    - key: pytorch.mnist_cnn
+      name: MNIST_CNN
       params:
-        n_components: 64
-        svd_solver: auto
-        whiten: true
+        input_size: [64, 64]
+        input_channels: 1
+        hidden_channels: [32, 64, 128]
+        epochs: 100
+        batch_size: 35
+        learning_rate: 0.0001
+        weight_decay: 0.01
+        dropout2d: 0.2
+        use_lr_scheduler: true
+        lr_scheduler_factor: 0.5
+        lr_scheduler_patience: 2
+        lr_scheduler_min_lr: 0.000001
+        early_stopping: true
+        early_stopping_patience: 5
+        early_stopping_min_delta: 0.0001
+        device: cpu
+        verbose: true
       store_predictions: true
