@@ -24,7 +24,8 @@ workflow:
   standardize_outputs: false
   seed: 42
 
-  output_dir: runs/fashion_mnist
+  # output_dir is the parent of runs/; artifacts land in runs/<run_tag>/.
+  output_dir: .
   run_tag: fashion_mnist_cnn_kaggle
   overwrite_existing_run: true
   predictions_format: parquet
