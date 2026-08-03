@@ -49,6 +49,9 @@ class ModelConfig:
 @dataclass
 class SurrogateWorkflowSpec:
     dataset_path: Union[str, Path]
+    # Selects the top-level orchestrator. ``task_type`` remains responsible
+    # for the statistical problem within a workflow.
+    workflow_type: str = "surrogate"  # "surrogate" or "mapper"
     dataset_format: str = "auto"
     dataset_source: Optional[str] = None  # "m3dc1_batch" or "m3dc1_batch_per_mode" = load from batch dir
     metadata_path: Optional[Union[str, Path]] = None
@@ -98,6 +101,13 @@ class SurrogateWorkflowSpec:
         # (README example, notebooks) should get the same coercion that
         # from_dict() does for YAML-loaded dicts. Entries that are already
         # typed are passed through untouched.
+        self.workflow_type = str(self.workflow_type).strip().lower()
+        if self.workflow_type not in {"surrogate", "mapper"}:
+            raise ValueError(
+                "workflow_type must be either 'surrogate' or 'mapper'; "
+                f"got {self.workflow_type!r}"
+            )
+
         coerced_models: List[ModelConfig] = []
         for m in self.models:
             if isinstance(m, ModelConfig):

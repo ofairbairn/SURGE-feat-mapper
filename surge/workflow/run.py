@@ -47,6 +47,24 @@ from .spec import HPOConfig, ModelConfig, SurrogateWorkflowSpec
 LOGGER = logging.getLogger(__name__)
 
 
+def run_workflow(
+    spec: SurrogateWorkflowSpec,
+    *,
+    invocation: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Dispatch a workflow spec to its requested top-level orchestrator."""
+    workflow_type = str(spec.workflow_type).strip().lower()
+    if workflow_type == "surrogate":
+        return run_surrogate_workflow(spec, invocation=invocation)
+    if workflow_type == "mapper":
+        # Lazy import keeps the established surrogate path independent from
+        # optional Mapper components and avoids an import cycle.
+        from Mapper.pipeline import run_mapper_workflow
+
+        return run_mapper_workflow(spec, invocation=invocation)
+    raise ValueError(f"Unsupported workflow_type: {workflow_type!r}")
+
+
 def _safe_model_artifact_tag(name: str) -> str:
     """Filesystem-safe stem for training_progress / training_history artifacts."""
     slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", name.strip())[:120]

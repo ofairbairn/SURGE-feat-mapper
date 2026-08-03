@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a SURGE workflow from a YAML spec file.
+"""Run a SURGE surrogate or Mapper workflow from a YAML spec file.
 
 This is the generic CLI wrapper referenced by docs/BUILD_YOUR_OWN_SURROGATE.md.
 It loads a :class:`~surge.workflow.spec.SurrogateWorkflowSpec` and calls
@@ -36,13 +36,13 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 import surge  # noqa: F401,E402 — register model adapters
-from surge.workflow.run import run_surrogate_workflow  # noqa: E402
+from surge.workflow.run import run_workflow  # noqa: E402
 from surge.workflow.spec import SurrogateWorkflowSpec  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a SURGE surrogate workflow from a YAML spec.",
+        description="Run a SURGE workflow from a YAML spec.",
     )
     parser.add_argument(
         "--spec",
@@ -76,15 +76,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Spec file not found: {spec_path}", file=sys.stderr)
         return 1
 
-    payload = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
-    spec = SurrogateWorkflowSpec.from_dict(payload)
+    payload = yaml.safe_load(spec_path.read_text(encoding="utf-8")) or {}
+    # Accept both the original flat spec and configs grouped under a
+    # top-level ``workflow`` key.
+    workflow_payload = payload.get("workflow", payload)
+    spec = SurrogateWorkflowSpec.from_dict(workflow_payload)
     if args.run_tag:
         spec.run_tag = args.run_tag
     if args.output_dir:
         spec.output_dir = str(args.output_dir.resolve())
 
     invocation = {"spec_path": str(spec_path)}
-    summary = run_surrogate_workflow(spec, invocation=invocation)
+    summary = run_workflow(spec, invocation=invocation)
     print(json.dumps(summary, indent=2))
     return 0
 

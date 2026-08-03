@@ -19,7 +19,7 @@ from .dataset import SurrogateDataset
 from .datasets import M3DC1Dataset, XGCDataset
 from .utils import get_data_path, setup_surge_path
 from .datagen import DataGenerator
-from .workflow.run import run_surrogate_workflow
+from .workflow.run import run_surrogate_workflow, run_workflow
 from .workflow.spec import HPOConfig, ModelConfig, SurrogateWorkflowSpec
 
 # Adapter registration happens eagerly inside `surge.model.__init__`
@@ -71,6 +71,7 @@ __all__ = [
     "registry_summary",
     "MODEL_REGISTRY",
     "run_surrogate_workflow",
+    "run_workflow",
     "SurrogateWorkflowSpec",
     "ModelConfig",
     "HPOConfig",

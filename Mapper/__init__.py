@@ -1,5 +1,5 @@
-"""
-SURGE mapper package init file.
-made so that the package can be imported and
-used in other scripts.
-"""
+"""SURGE Mapper package."""
+
+from .pipeline import run_mapper_workflow
+
+__all__ = ["run_mapper_workflow"]

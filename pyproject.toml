@@ -67,11 +67,11 @@ Documentation = "https://github.com/S-Villar/SURGE/blob/main/docs/README.md"
 Repository = "https://github.com/S-Villar/SURGE"
 Issues = "https://github.com/S-Villar/SURGE/issues"
 
-# Install the `surge` Python package from the `surge/` directory.
+# Install the `surge` package and the developing `Mapper` package.
 # Package name on PyPI is `surge-ml` to reduce clash with other projects named "surge".
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["surge*"]
+include = ["surge*", "Mapper*"]
 
 # Scope `pytest` to the actual test suite. Without this, `pytest -q` from the
 # repo root walks into scripts/ and examples/ and trips over legacy tutorial
