@@ -47,6 +47,7 @@ class PCAAdapter(BaseModelAdapter):
 		"whiten": False,
 		"svd_solver": "auto",
 		"random_state": 42,
+		"verbose": False,
 	}
 
 	def _build_model(self, **kwargs: Any) -> PCAModel:

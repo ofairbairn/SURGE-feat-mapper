@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Optional
 
 import joblib
 import numpy as np
 from sklearn.decomposition import PCA
+
+try:
+	from tqdm.auto import tqdm
+
+	TQDM_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+	tqdm = None  # type: ignore[assignment]
+	TQDM_AVAILABLE = False
 
 
 def _as_2d_array(X: Any) -> np.ndarray:
@@ -29,6 +38,7 @@ class PCAModel:
 		whiten: bool = False,
 		svd_solver: str = "auto",
 		random_state: Optional[int] = 42,
+		verbose: bool = False,
 		**_: Any,
 	) -> None:
 		if n_components is not None and int(n_components) < 1:
@@ -40,6 +50,7 @@ class PCAModel:
 		self.whiten = bool(whiten)
 		self.svd_solver = str(svd_solver)
 		self.random_state = random_state
+		self.verbose = bool(verbose)
 		self.model: Optional[PCA] = None
 		self.n_components_: Optional[int] = None
 		self.is_fitted = False
@@ -59,7 +70,25 @@ class PCAModel:
 			svd_solver=self.svd_solver,
 			random_state=self.random_state,
 		)
-		self.model.fit(arr)
+		fit_start = time.perf_counter()
+		if self.verbose and TQDM_AVAILABLE:
+			with tqdm(total=1, desc="PCA Fitting", unit="fit") as progress:
+				self.model.fit(arr)
+				progress.update(1)
+				progress.set_postfix(
+					components=effective_components,
+					elapsed=f"{time.perf_counter() - fit_start:.2f}s",
+				)
+		else:
+			if self.verbose:
+				print("[PCA] fitting...", flush=True)
+			self.model.fit(arr)
+			if self.verbose:
+				print(
+					f"[PCA] fit complete components={effective_components} "
+					f"elapsed={time.perf_counter() - fit_start:.2f}s",
+					flush=True,
+				)
 		self.n_components_ = int(self.model.n_components_)
 		self.is_fitted = True
 		return self
@@ -105,6 +134,7 @@ class PCAModel:
 					"whiten": self.whiten,
 					"svd_solver": self.svd_solver,
 					"random_state": self.random_state,
+					"verbose": self.verbose,
 				},
 				"model": self.model,
 				"n_components_": self.n_components_,
@@ -121,9 +151,10 @@ class PCAModel:
 		self.whiten = bool(config["whiten"])
 		self.svd_solver = str(config["svd_solver"])
 		self.random_state = config["random_state"]
+		self.verbose = bool(config.get("verbose", self.verbose))
 		self.model = payload["model"]
 		self.n_components_ = payload.get("n_components_")
 		self.is_fitted = bool(payload.get("is_fitted", self.model is not None))
 
 
-__all__ = ["PCAModel"]
+__all__ = ["PCAModel", "TQDM_AVAILABLE"]

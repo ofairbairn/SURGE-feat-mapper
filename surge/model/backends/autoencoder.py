@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Sequence, Tuple
 
@@ -9,6 +10,14 @@ import numpy as np
 from sklearn.linear_model import Ridge
 
 from .owen_vae import reconstruction_metrics
+
+try:
+    from tqdm.auto import trange
+
+    TQDM_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    trange = None  # type: ignore[assignment]
+    TQDM_AVAILABLE = False
 
 try:
     import torch
@@ -192,7 +201,20 @@ class AutoencoderModel:
         self.training_history.clear()
         self.target_head = None
         self.model.train()
-        for epoch in range(1, self.n_epochs + 1):
+        training_start = time.perf_counter()
+        epoch_iterator = (
+            trange(
+                1,
+                self.n_epochs + 1,
+                desc="Autoencoder Training",
+                unit="epoch",
+                disable=not self.verbose,
+            )
+            if self.verbose and TQDM_AVAILABLE
+            else range(1, self.n_epochs + 1)
+        )
+        for epoch in epoch_iterator:
+            epoch_start = time.perf_counter()
             epoch_loss = 0.0
             n_samples = 0
 
@@ -228,10 +250,34 @@ class AutoencoderModel:
             row: Dict[str, float] = {
                 "epoch": float(epoch),
                 "train_loss": float(train_state.train_loss),
+                "epoch_seconds": float(time.perf_counter() - epoch_start),
+                "elapsed_seconds": float(time.perf_counter() - training_start),
             }
             if train_state.val_loss is not None:
                 row["val_loss"] = float(train_state.val_loss)
             self.training_history.append(row)
+
+            if self.verbose and TQDM_AVAILABLE and hasattr(epoch_iterator, "set_postfix"):
+                progress_metrics = {
+                    "train_loss": f"{train_state.train_loss:.6f}",
+                    "elapsed": f"{row['elapsed_seconds']:.1f}s",
+                }
+                if train_state.val_loss is not None:
+                    progress_metrics["val_loss"] = f"{train_state.val_loss:.6f}"
+                epoch_iterator.set_postfix(progress_metrics)
+            elif self.verbose and (
+                epoch == 1 or epoch % 10 == 0 or epoch == self.n_epochs
+            ):
+                val_text = (
+                    f" val_loss={train_state.val_loss:.6f}"
+                    if train_state.val_loss is not None
+                    else ""
+                )
+                print(
+                    f"[Autoencoder] epoch={epoch:03d} "
+                    f"train_loss={train_state.train_loss:.6f}{val_text} "
+                    f"elapsed={row['elapsed_seconds']:.1f}s"
+                )
 
         if y is not None:
             y_arr = _as_2d_targets(y)
@@ -359,4 +405,4 @@ class AutoencoderModel:
         self.is_fitted = bool(payload.get("is_fitted", False))
 
 
-__all__ = ["AutoencoderModel", "TORCH_AVAILABLE"]
+__all__ = ["AutoencoderModel", "TORCH_AVAILABLE", "TQDM_AVAILABLE"]
