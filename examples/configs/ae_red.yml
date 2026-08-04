@@ -1,16 +1,31 @@
 workflow:
+  workflow_type: mapper
   dataset_path: "C:\\Users\\Bipo1\\Downloads\\VAE UCI Wine Data\\winequality-red-comma-unsupervised.csv"
   dataset_format: auto
   task_type: unsupervised
-  unsupervised_ladder_mode: auto
-  unsupervised_ladder_order: [pca, ae]
-  unsupervised_ladder_emit_all: true
+  test_fraction: 0.2
+  val_fraction: 0.1
+  seed: 42
+  output_dir: runs
+  # Mapper ladder gate keys (val RMSE). PCA starts at 0.0 so it always climbs
+  # to the autoencoder rung; lower the per-rung limit to force a deeper climb.
   unsupervised_ladder_thresholds:
-    pca_min_hopkins: 0.60
-    ae_min_hopkins: 0.55
-    ae_min_recon_improvement: 0.05
+    pca_max_recon_rmse: 0.0
+    ae_max_recon_rmse: 0.10
+    vae_max_recon_rmse: 0.10
+  mapper_diversity:
+    enabled: true
+    kernel: rbf
+    max_samples: 2000
+    save_similarity_matrix: true
 
   models:
+    - key: sklearn.pca
+      name: PCA
+      params:
+        n_components: 8
+        svd_solver: auto
+        whiten: true
     - key: pytorch.autoencoder
       name: Autoencoder
       params:
@@ -21,20 +36,14 @@ workflow:
         learning_rate: 0.001
         device: cpu
         verbose: true
-
-viz:
-  include_hpo: false
-  unsupervised_latent:
-    color_by: cluster
-    label_column: quality
-    cluster_method: kmeans
-    n_clusters: 12
-    interactive_threshold: 50000
-    interactive_hover_sample_frac: 0.02
-    anomaly_quantile: 0.95
-    latent_quality_n_neighbors: 10
-  unsupervised_reconstruction:
-    top_n_features: 6
-    worst_n_samples: 25
-    anomaly_quantile: 0.95
-    include_image_panels: false
+    - key: pytorch.unsupervised_vae
+      name: VAE
+      params:
+        latent_dim: 8
+        hidden_dims: [128, 64]
+        n_epochs: 150
+        batch_size: 128
+        learning_rate: 0.001
+        beta: 1.0
+        device: cpu
+        verbose: true
