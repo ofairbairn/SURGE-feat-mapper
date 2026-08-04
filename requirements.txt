@@ -13,6 +13,7 @@ bokeh>=3.4.0
 holoviews>=1.19.0
 datashader>=0.16.0
 hdbscan>=0.8.40
+vendi-score>=0.0.3
 shap>=0.52.0
 
 # Optional dependencies for enhanced models

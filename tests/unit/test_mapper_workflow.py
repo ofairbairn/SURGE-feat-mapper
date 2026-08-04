@@ -51,10 +51,12 @@ def test_mapper_workflow_robustly_scales_from_training_split(
     summary = run_workflow(spec)
 
     assert summary["workflow_type"] == "mapper"
-    assert summary["status"] == "representation_complete"
+    assert summary["status"] == "diversity_complete"
     assert summary["representation_ladder"]["selected_rung"] == "pca"
     assert summary["representation_ladder"]["quality_sufficient"] is True
     assert len(summary["representation_ladder"]["rungs_run"]) == 1
+    assert summary["diversity"]["selected_representation"] == "pca"
+    assert summary["diversity"]["vendi_score"] >= 1.0
     scaler = joblib.load(summary["artifacts"]["scaler"])
     assert isinstance(scaler, DataScaler)
     with np.load(summary["artifacts"]["scaled_splits"]) as splits:
@@ -72,6 +74,9 @@ def test_mapper_workflow_robustly_scales_from_training_split(
     assert (root / "spec.yaml").is_file()
     assert (root / "metrics.json").is_file()
     assert (root / "mapper_latent_splits.npz").is_file()
+    assert (root / "diversity" / "vendi_diversity.json").is_file()
+    assert (root / "diversity" / "vendi_q_profile.png").is_file()
+    assert (root / "diversity" / "vendi_similarity_matrix.npz").is_file()
     assert (root / "workflow_summary.json").is_file()
 
 
@@ -160,6 +165,7 @@ def test_mapper_ladder_stops_or_climbs_at_each_quality_gate(
         output_dir=tmp_path,
         run_tag=f"ladder_{selected}_{exhausted}",
         unsupervised_ladder_thresholds={"max_recon_rmse": 0.10},
+        mapper_diversity={"enabled": False},
     )
 
     summary = pipeline.run_mapper_workflow(spec)
@@ -190,6 +196,7 @@ def test_mapper_ladder_runs_real_pca_ae_and_vae_backends(tmp_path: Path) -> None
         output_dir=tmp_path,
         run_tag="real_ladder",
         unsupervised_ladder_thresholds={"max_recon_rmse": 0.0},
+        mapper_diversity={"enabled": False},
         models=[
             {"key": "sklearn.pca", "params": {"n_components": 2}},
             {

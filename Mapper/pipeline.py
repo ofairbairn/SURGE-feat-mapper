@@ -28,17 +28,24 @@ from surge.utils import posix_str
 from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
 
 from .data_preprocess import DataScaler
+from .diversity import compute_vendi_diversity, plot_vendi_q_profile
 
 _LADDER_RUNGS = ("pca", "ae", "vae")
 _LADDER_MODEL_KEYS = {
     "pca": "sklearn.pca",
     "ae": "pytorch.autoencoder",
-    "vae": "pytorch.owen_vae",
+    "vae": "pytorch.unsupervised_vae",
 }
 _LADDER_ALIASES = {
     "pca": {"pca", "sklearn.pca"},
     "ae": {"ae", "autoencoder", "pytorch.autoencoder"},
-    "vae": {"vae", "owen_vae", "pytorch.owen_vae"},
+    "vae": {
+        "vae",
+        "unsupervised_vae",
+        "pytorch.unsupervised_vae",
+        "owen_vae",
+        "pytorch.owen_vae",
+    },
 }
 _DEFAULT_MAX_RECON_RMSE = 0.10
 
@@ -235,7 +242,77 @@ def run_mapper_workflow(
         latent_payload["test_index"] = raw.test_index
     np.savez_compressed(latent_path, **latent_payload)
 
-    save_metrics({"representation_ladder": ladder_results}, paths)
+    diversity_report: Optional[Dict[str, Any]] = None
+    diversity_artifacts: Dict[str, str] = {}
+    diversity_config = dict(spec.mapper_diversity)
+    if bool(diversity_config.get("enabled", True)):
+        kernel_name = str(diversity_config.get("kernel", "rbf")).strip().lower()
+        if kernel_name != "rbf":
+            raise ValueError("Mapper Vendi diversity currently supports kernel='rbf'")
+        raw_bandwidth = diversity_config.get("rbf_bandwidth")
+        rbf_bandwidth = (
+            None
+            if raw_bandwidth is None
+            or str(raw_bandwidth).strip().lower() in {"auto", "median"}
+            else float(raw_bandwidth)
+        )
+        max_samples_value = diversity_config.get("max_samples", 2_000)
+        max_samples = (
+            None if max_samples_value is None else int(max_samples_value)
+        )
+        Z_all, all_indices = _combine_latent_splits(
+            Z_train,
+            Z_val,
+            Z_test,
+            raw.train_index,
+            raw.val_index,
+            raw.test_index,
+        )
+        diversity_result = compute_vendi_diversity(
+            Z_all,
+            q_values=diversity_config.get("q_values"),
+            rbf_bandwidth=rbf_bandwidth,
+            max_samples=max_samples,
+            random_state=int(diversity_config.get("random_state", spec.seed)),
+        )
+        diversity_report = diversity_result.report
+        diversity_report["selected_representation"] = selected_rung
+        diversity_report["embedding"]["scope"] = "train_val_test"
+
+        diversity_dir = paths.root / "diversity"
+        diversity_dir.mkdir(parents=True, exist_ok=True)
+        diversity_report_path = diversity_dir / "vendi_diversity.json"
+        with diversity_report_path.open("w", encoding="utf-8") as handle:
+            json.dump(diversity_report, handle, indent=2)
+        diversity_plot_path = plot_vendi_q_profile(
+            diversity_result,
+            diversity_dir / "vendi_q_profile.png",
+        )
+        diversity_artifacts = {
+            "report": posix_str(diversity_report_path),
+            "q_profile_plot": posix_str(diversity_plot_path),
+        }
+        if bool(diversity_config.get("save_similarity_matrix", True)):
+            similarity_path = diversity_dir / "vendi_similarity_matrix.npz"
+            np.savez_compressed(
+                similarity_path,
+                K=diversity_result.similarity_matrix,
+                sample_index=all_indices[diversity_result.sample_positions],
+            )
+            diversity_artifacts["similarity_matrix"] = posix_str(similarity_path)
+        print(
+            "[Mapper diversity] "
+            f"VS={diversity_report['vendi_score']:.6f} effective modes "
+            f"using {diversity_report['kernel']['name'].upper()} kernel",
+            flush=True,
+        )
+
+    metrics_payload: Dict[str, Any] = {
+        "representation_ladder": ladder_results,
+    }
+    if diversity_report is not None:
+        metrics_payload["diversity"] = diversity_report
+    save_metrics(metrics_payload, paths)
 
     split_sizes = {
         "train": int(X_train.shape[0]),
@@ -244,7 +321,11 @@ def run_mapper_workflow(
     }
     summary: Dict[str, Any] = {
         "workflow_type": "mapper",
-        "status": "representation_complete",
+        "status": (
+            "diversity_complete"
+            if diversity_report is not None
+            else "representation_complete"
+        ),
         "dataset": dataset.summary(),
         "input_columns": list(dataset.input_columns),
         "split_sizes": split_sizes,
@@ -268,6 +349,7 @@ def run_mapper_workflow(
                 and not selected_quality_sufficient
             ),
         },
+        "diversity": diversity_report,
         "next_stage": "clustering_tendency",
         "artifacts": {
             "root": posix_str(paths.root),
@@ -275,12 +357,36 @@ def run_mapper_workflow(
             "scaled_splits": posix_str(splits_path),
             "latent_splits": posix_str(latent_path),
             "metrics": posix_str(paths.metrics_file),
+            "diversity": diversity_artifacts,
             "spec": posix_str(paths.spec_file),
             "summary": posix_str(paths.summary_file),
         },
     }
     save_workflow_summary(summary, paths)
     return summary
+
+
+def _combine_latent_splits(
+    Z_train: np.ndarray,
+    Z_val: np.ndarray,
+    Z_test: Optional[np.ndarray],
+    train_index: np.ndarray,
+    val_index: np.ndarray,
+    test_index: Optional[np.ndarray],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Combine selected-model embeddings in original dataset row order."""
+    embeddings = [Z_train, Z_val]
+    indices = [np.asarray(train_index), np.asarray(val_index)]
+    if Z_test is not None and test_index is not None:
+        embeddings.append(Z_test)
+        indices.append(np.asarray(test_index))
+    Z_all = np.vstack(embeddings)
+    all_indices = np.concatenate(indices)
+    try:
+        order = np.argsort(all_indices)
+    except TypeError:
+        order = np.argsort(all_indices.astype(str))
+    return Z_all[order], all_indices[order]
 
 
 def _resolve_ladder_model(

@@ -80,6 +80,8 @@ class SurrogateWorkflowSpec:
     unsupervised_ladder_order: Sequence[str] = field(default_factory=lambda: ("pca", "ae", "vae"))
     unsupervised_ladder_emit_all: bool = True
     unsupervised_ladder_thresholds: Dict[str, Any] = field(default_factory=dict)
+    # Vendi V1 settings for Mapper's selected latent representation.
+    mapper_diversity: Dict[str, Any] = field(default_factory=dict)
     # HDF5 leaf name under run*/sparc_* (default: sdata_pertfields_grid_complex_v2.h5).
     # Use sdata_complex_v2.h5 on CFS-style trees where that file holds nonsymmetric δp modes.
     batch_dir_filename: Optional[str] = None
