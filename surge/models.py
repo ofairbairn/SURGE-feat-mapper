@@ -12,7 +12,7 @@ from .model import (  # noqa: F401,F403 - re-export
     GPflowMultiKernelAdapter,
     MLPModel,
     MODEL_REGISTRY,
-    MNISTCNNAdapter, #Owen's mnist example
+    MNISTCNNAdapter,
     PyTorchMLPAdapter,
     RandomForestModel,
     SklearnRegressorAdapter,
@@ -33,7 +33,7 @@ __all__ = [
     "RandomForestModel",
     "MLPModel",
     "GPRModel",
-    "MNISTCNNAdapter", #Owen's mnist example
+    "MNISTCNNAdapter",
     "PyTorchMLPAdapter",
     "GPflowGPRAdapter",
     "GPflowMultiKernelAdapter",

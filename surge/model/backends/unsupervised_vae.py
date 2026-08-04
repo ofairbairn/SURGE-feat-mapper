@@ -188,7 +188,7 @@ class _TorchVAETrainState:
     val_kl: Optional[float] = None
 
 
-class OwenVAEModel:
+class UnsupervisedVAEModel:
     """Neural variational autoencoder model for unsupervised SURGE workflows."""
 
     def __init__(
@@ -208,7 +208,7 @@ class OwenVAEModel:
         **_: Any,
     ) -> None:
         if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is required for OwenVAEModel. Install torch first.")
+            raise ImportError("PyTorch is required for UnsupervisedVAEModel. Install torch first.")
         self.latent_dim = int(latent_dim)
         if isinstance(hidden_dims, (int, np.integer)):
             hidden_dims = (int(hidden_dims),)
@@ -278,7 +278,7 @@ class OwenVAEModel:
         X_val: Any = None,
         y_val: Any = None,
         finetune: bool = False,
-    ) -> "OwenVAEModel":
+    ) -> "UnsupervisedVAEModel":
         X_train = _as_2d_array(X)
         _ = y_val
         target_train = _reconstruction_target(X_train, y)
@@ -286,7 +286,7 @@ class OwenVAEModel:
         self._build_if_needed(target_train.shape[1], force_rebuild=force_rebuild)
 
         if self.model is None:
-            raise ValueError("Internal Owen VAE model was not initialized")
+            raise ValueError("Internal unsupervised VAE model was not initialized")
 
         optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         train_loader = self._make_loader(target_train, shuffle=True)
@@ -304,7 +304,7 @@ class OwenVAEModel:
             trange(
                 1,
                 self.n_epochs + 1,
-                desc="Owen VAE Training",
+                desc="Unsupervised VAE Training",
                 unit="epoch",
                 disable=not self.verbose,
             )
@@ -394,7 +394,7 @@ class OwenVAEModel:
                     else ""
                 )
                 print(
-                    f"[OwenVAE] epoch={epoch:03d} "
+                    f"[UnsupervisedVAE] epoch={epoch:03d} "
                     f"train_loss={train_state.train_loss:.6f}{val_text} "
                     f"elapsed={row['elapsed_seconds']:.1f}s"
                 )
@@ -543,7 +543,7 @@ class OwenVAEModel:
 
 
 __all__ = [
-    "OwenVAEModel",
+    "UnsupervisedVAEModel",
     "TORCH_AVAILABLE",
     "TQDM_AVAILABLE",
     "reconstruction_metrics",

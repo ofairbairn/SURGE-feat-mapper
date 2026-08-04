@@ -1,4 +1,4 @@
-"""Adapter registering ``pytorch.owen_vae``."""
+"""Adapter registering ``pytorch.unsupervised_vae``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import numpy as np
 from ...hpc import ResourceProfile
 from ..base import BaseModelAdapter, ModelInfo
 
-_OWEN_VAE_INFO = ModelInfo(
+_UNSUPERVISED_VAE_INFO = ModelInfo(
     architecture=(
         "Unsupervised variational autoencoder with an MLP encoder/decoder. "
         "The encoder maps inputs to Gaussian latent parameters, the decoder "
@@ -39,8 +39,8 @@ _OWEN_VAE_INFO = ModelInfo(
     ],
 )
 
-_OWEN_VAE_PROFILE = ResourceProfile(
-    name="pytorch.owen_vae",
+_UNSUPERVISED_VAE_PROFILE = ResourceProfile(
+    name="pytorch.unsupervised_vae",
     supports_cpu=True,
     supports_gpu=True,
     worker_semantics="dataloader_workers",
@@ -48,16 +48,16 @@ _OWEN_VAE_PROFILE = ResourceProfile(
 )
 
 
-class OwenVAEAdapter(BaseModelAdapter):
+class UnsupervisedVAEAdapter(BaseModelAdapter):
     """Unsupervised variational autoencoder adapter for SURGE."""
 
-    name = "pytorch.owen_vae"
+    name = "pytorch.unsupervised_vae"
     backend = "pytorch"
     task_type = "unsupervised"
     uses_internal_preprocessing = False
     handles_output_scaling = False
-    resource_profile = _OWEN_VAE_PROFILE
-    _INFO = _OWEN_VAE_INFO
+    resource_profile = _UNSUPERVISED_VAE_PROFILE
+    _INFO = _UNSUPERVISED_VAE_INFO
     default_params: Dict[str, Any] = {
         "latent_dim": 8,
         "hidden_dims": (128, 64),
@@ -79,8 +79,8 @@ class OwenVAEAdapter(BaseModelAdapter):
         params.update(kwargs)
         if "hidden_dims" not in params and "hidden_dim" in params:
             params["hidden_dims"] = params.pop("hidden_dim")
-        mod = importlib.import_module("surge.model.backends.owen_vae")
-        return mod.OwenVAEModel(**params)
+        mod = importlib.import_module("surge.model.backends.unsupervised_vae")
+        return mod.UnsupervisedVAEModel(**params)
 
     def fit(
         self,
@@ -91,7 +91,7 @@ class OwenVAEAdapter(BaseModelAdapter):
         y_val: Any = None,
         finetune: bool = False,
         **kwargs: Any,
-    ) -> "OwenVAEAdapter":
+    ) -> "UnsupervisedVAEAdapter":
         if self._model is None and not finetune:
             runtime_params = dict(self.params)
             res = self._last_fit_resources or {}

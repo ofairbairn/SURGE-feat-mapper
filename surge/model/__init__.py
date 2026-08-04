@@ -209,11 +209,15 @@ except Exception:
     pass
 
 try:
-    from .adapters.owen_vae import OwenVAEAdapter
-    from .pytorch import PYTORCH_AVAILABLE as _PTA_OWEN_VAE
+    from .adapters.unsupervised_vae import UnsupervisedVAEAdapter
+    from .pytorch import PYTORCH_AVAILABLE as _PTA_UNSUPERVISED_VAE
 
-    if _PTA_OWEN_VAE:
-        register_model(OwenVAEAdapter, key='pytorch.owen_vae', aliases=['owen_vae'])
+    if _PTA_UNSUPERVISED_VAE:
+        register_model(
+            UnsupervisedVAEAdapter,
+            key='pytorch.unsupervised_vae',
+            aliases=['unsupervised_vae'],
+        )
 except Exception:
     pass
 

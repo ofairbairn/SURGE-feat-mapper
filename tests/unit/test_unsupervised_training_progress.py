@@ -73,17 +73,17 @@ def test_autoencoder_records_validation_loss_and_timed_tqdm_progress(
     assert all("val_loss" in postfix for postfix in progress.postfixes)
 
 
-def test_owen_vae_reports_timed_tqdm_progress(
+def test_unsupervised_vae_reports_timed_tqdm_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pytest.importorskip("torch")
-    from surge.model.backends import owen_vae as backend
+    from surge.model.backends import unsupervised_vae as backend
 
     progress = _FakeEpochProgress(1, 3)
     monkeypatch.setattr(backend, "TQDM_AVAILABLE", True)
     monkeypatch.setattr(backend, "trange", lambda *args, **kwargs: progress)
     X_train, X_val = _training_data()
-    model = backend.OwenVAEModel(
+    model = backend.UnsupervisedVAEModel(
         latent_dim=2,
         hidden_dims=(8,),
         n_epochs=2,

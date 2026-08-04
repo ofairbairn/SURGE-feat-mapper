@@ -190,8 +190,8 @@ def test_unsupervised_workflow_prepends_pca_baseline() -> None:
         seed=7,
         models=[
             ModelConfig(
-                key="pytorch.owen_vae",
-                name="Owen_VAE",
+                key="pytorch.unsupervised_vae",
+                name="Unsupervised_VAE",
                 params={"latent_dim": 5},
             )
         ],
@@ -199,7 +199,7 @@ def test_unsupervised_workflow_prepends_pca_baseline() -> None:
 
     configs = _effective_model_configs(spec)
 
-    assert [config.key for config in configs] == ["sklearn.pca", "pytorch.owen_vae"]
+    assert [config.key for config in configs] == ["sklearn.pca", "pytorch.unsupervised_vae"]
     assert configs[0].params == {
         "n_components": 5,
         "max_components": 32,

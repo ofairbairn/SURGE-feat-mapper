@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 import numpy as np
 from sklearn.linear_model import Ridge
 
-from .owen_vae import reconstruction_metrics
+from .unsupervised_vae import reconstruction_metrics
 
 try:
     from tqdm.auto import trange

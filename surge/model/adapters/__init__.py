@@ -2,7 +2,7 @@
 
 from .autoencoder import AutoencoderAdapter
 from .mnist_cnn import MNISTCNNAdapter
-from .owen_vae import OwenVAEAdapter
+from .unsupervised_vae import UnsupervisedVAEAdapter
 from .pca import PCAAdapter
 
-__all__ = ["AutoencoderAdapter", "MNISTCNNAdapter", "OwenVAEAdapter", "PCAAdapter"]
+__all__ = ["AutoencoderAdapter", "MNISTCNNAdapter", "UnsupervisedVAEAdapter", "PCAAdapter"]

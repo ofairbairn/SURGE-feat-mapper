@@ -3,7 +3,7 @@
 #Good for converting data types, as well as in this case delimiters.
 
 #################################
-#Owen's example UCI Wine Dataset
+#Example UCI Wine Dataset
 #################################
 from surge.datagen.converters import convert_csv_delimiter
 convert_csv_delimiter(

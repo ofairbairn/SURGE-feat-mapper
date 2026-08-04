@@ -142,7 +142,7 @@ def test_mapper_ladder_stops_or_climbs_at_each_quality_gate(
     rung_by_key = {
         "sklearn.pca": "pca",
         "pytorch.autoencoder": "ae",
-        "pytorch.owen_vae": "vae",
+        "pytorch.unsupervised_vae": "vae",
     }
     calls: list[str] = []
 
@@ -203,7 +203,7 @@ def test_mapper_ladder_runs_real_pca_ae_and_vae_backends(tmp_path: Path) -> None
                 },
             },
             {
-                "key": "pytorch.owen_vae",
+                "key": "pytorch.unsupervised_vae",
                 "params": {
                     "latent_dim": 2,
                     "hidden_dims": [8],

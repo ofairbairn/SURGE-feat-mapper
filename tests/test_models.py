@@ -61,7 +61,7 @@ def unsup_data():
 
 
 @pytest.fixture()
-def owen_target_head_data():
+def unsupervised_target_head_data():
     """Data where y shape differs from X so the latent Ridge head is used."""
     rng = np.random.default_rng(4)
     X = rng.standard_normal((80, 6)).astype("float32")
@@ -738,9 +738,9 @@ def test_autoencoder_encode_decode_roundtrip(unsup_data):
     assert recon.shape == X_te.shape
 
 
-def test_autoencoder_target_head_when_y_shape_differs(owen_target_head_data):
+def test_autoencoder_target_head_when_y_shape_differs(unsupervised_target_head_data):
     pytest.importorskip("torch")
-    X_tr, y_tr, X_te, y_te = owen_target_head_data
+    X_tr, y_tr, X_te, y_te = unsupervised_target_head_data
     adapter = MODEL_REGISTRY.create(
         "pytorch.autoencoder",
         latent_dim=4,
@@ -796,16 +796,16 @@ def test_autoencoder_save_load_round_trip(unsup_data, tmp_path):
     np.testing.assert_allclose(preds_before, preds_after, rtol=1e-5, atol=1e-6)
 
 
-def test_owen_vae_registered():
+def test_unsupervised_vae_registered():
     pytest.importorskip("torch")
-    assert "pytorch.owen_vae" in MODEL_REGISTRY
+    assert "pytorch.unsupervised_vae" in MODEL_REGISTRY
 
 
-def test_owen_vae_fit_predict_reconstruction_shape(unsup_data):
+def test_unsupervised_vae_fit_predict_reconstruction_shape(unsup_data):
     pytest.importorskip("torch")
     X_tr, X_te = unsup_data
     adapter = MODEL_REGISTRY.create(
-        "pytorch.owen_vae",
+        "pytorch.unsupervised_vae",
         latent_dim=4,
         hidden_dims=(16, 8),
         n_epochs=2,
@@ -818,11 +818,11 @@ def test_owen_vae_fit_predict_reconstruction_shape(unsup_data):
     assert np.isfinite(recon).all()
 
 
-def test_owen_vae_fit_with_validation_data(unsup_data):
+def test_unsupervised_vae_fit_with_validation_data(unsup_data):
     pytest.importorskip("torch")
     X_tr, X_val = unsup_data
     adapter = MODEL_REGISTRY.create(
-        "pytorch.owen_vae",
+        "pytorch.unsupervised_vae",
         latent_dim=4,
         hidden_dims=(16, 8),
         n_epochs=2,
@@ -837,11 +837,11 @@ def test_owen_vae_fit_with_validation_data(unsup_data):
     assert all("val_loss" in row for row in history)
 
 
-def test_owen_vae_encode_decode_roundtrip(unsup_data):
+def test_unsupervised_vae_encode_decode_roundtrip(unsup_data):
     pytest.importorskip("torch")
     X_tr, X_te = unsup_data
     adapter = MODEL_REGISTRY.create(
-        "pytorch.owen_vae",
+        "pytorch.unsupervised_vae",
         latent_dim=4,
         hidden_dims=(16, 8),
         n_epochs=2,
@@ -858,11 +858,11 @@ def test_owen_vae_encode_decode_roundtrip(unsup_data):
     assert np.isfinite(recon).all()
 
 
-def test_owen_vae_target_head_when_y_shape_differs(owen_target_head_data):
+def test_unsupervised_vae_target_head_when_y_shape_differs(unsupervised_target_head_data):
     pytest.importorskip("torch")
-    X_tr, y_tr, X_te, y_te = owen_target_head_data
+    X_tr, y_tr, X_te, y_te = unsupervised_target_head_data
     adapter = MODEL_REGISTRY.create(
-        "pytorch.owen_vae",
+        "pytorch.unsupervised_vae",
         latent_dim=4,
         hidden_dims=(16, 8),
         n_epochs=2,
@@ -875,11 +875,11 @@ def test_owen_vae_target_head_when_y_shape_differs(owen_target_head_data):
     assert np.isfinite(preds).all()
 
 
-def test_owen_vae_reconstruction_metrics_basic(unsup_data):
+def test_unsupervised_vae_reconstruction_metrics_basic(unsup_data):
     pytest.importorskip("torch")
     X_tr, X_te = unsup_data
     adapter = MODEL_REGISTRY.create(
-        "pytorch.owen_vae",
+        "pytorch.unsupervised_vae",
         latent_dim=4,
         hidden_dims=(16, 8),
         n_epochs=2,
@@ -895,20 +895,20 @@ def test_owen_vae_reconstruction_metrics_basic(unsup_data):
     assert metrics["ssim"] is None
 
 
-def test_owen_vae_reconstruction_metrics_ssim_requires_shape(unsup_data):
+def test_unsupervised_vae_reconstruction_metrics_ssim_requires_shape(unsup_data):
     pytest.importorskip("torch")
-    from surge.model.backends.owen_vae import reconstruction_metrics
+    from surge.model.backends.unsupervised_vae import reconstruction_metrics
 
     _, X_te = unsup_data
     with pytest.raises(ValueError):
         reconstruction_metrics(X_te, X_te, include_ssim=True)
 
 
-def test_owen_vae_save_load_round_trip(unsup_data, tmp_path):
+def test_unsupervised_vae_save_load_round_trip(unsup_data, tmp_path):
     pytest.importorskip("torch")
     X_tr, X_te = unsup_data
     adapter = MODEL_REGISTRY.create(
-        "pytorch.owen_vae",
+        "pytorch.unsupervised_vae",
         latent_dim=4,
         hidden_dims=(16, 8),
         n_epochs=2,
@@ -918,11 +918,11 @@ def test_owen_vae_save_load_round_trip(unsup_data, tmp_path):
     adapter.fit(X_tr)
     preds_before = adapter.predict(X_te)
 
-    save_path = tmp_path / "owen_vae.joblib"
+    save_path = tmp_path / "unsupervised_vae.joblib"
     adapter.save(save_path)
 
     loaded_adapter = MODEL_REGISTRY.create(
-        "pytorch.owen_vae",
+        "pytorch.unsupervised_vae",
         latent_dim=4,
         hidden_dims=(16, 8),
     )
@@ -931,9 +931,9 @@ def test_owen_vae_save_load_round_trip(unsup_data, tmp_path):
     np.testing.assert_allclose(preds_before, preds_after, rtol=1e-5, atol=1e-6)
 
 
-def test_owen_vae_predict_before_fit_raises():
+def test_unsupervised_vae_predict_before_fit_raises():
     pytest.importorskip("torch")
-    adapter = MODEL_REGISTRY.create("pytorch.owen_vae", latent_dim=4, hidden_dims=(16, 8))
+    adapter = MODEL_REGISTRY.create("pytorch.unsupervised_vae", latent_dim=4, hidden_dims=(16, 8))
     with pytest.raises(ValueError):
         adapter.predict(np.zeros((5, 6), dtype="float32"))
 
