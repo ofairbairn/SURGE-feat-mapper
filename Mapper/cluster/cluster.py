@@ -449,8 +449,37 @@ def _partition_scores(
             scores[name] = float(func(valid_latent, valid_labels))
         except Exception:
             scores[name] = None
-    scores["bic"] = _gaussian_partition_bic(valid_latent, valid_labels)
+    scores["bic"] = _gaussian_partition_bic(valid_latent, valid_labels) #bic voting computed partition labels
     return scores
+
+
+def _gmm_bic(
+    latent: np.ndarray,
+    n_components: int,
+    *,
+    covariance_type: str = "full",
+    random_state: int = 42,
+) -> Optional[float]:
+    """True Gaussian-mixture BIC (sklearn soft-assignment likelihood).
+
+    Lower is better. Complements ``_gaussian_partition_bic`` (a hard-assignment
+    approximation); ``None`` when the fit fails or is degenerate.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    latent = np.asarray(latent, dtype=np.float64)
+    n_samples = len(latent)
+    if n_samples < 2 or n_components < 1 or n_components > n_samples:
+        return None
+    try:
+        mixture = GaussianMixture(
+            n_components=n_components,
+            covariance_type=covariance_type,
+            random_state=random_state,
+        ).fit(latent)
+        return float(mixture.bic(latent))
+    except Exception:
+        return None
 
 
 def _label_agreement(
@@ -562,8 +591,9 @@ def run_cluster_analysis(
 
     1. HDBSCAN always runs first (density-based, no k required).
     2. The HDBSCAN cluster count anchors k for k-means and GMM; the internal
-       metrics (silhouette, CH, DB, BIC) vote within a small window around the
-       anchor, and the gap statistic provides a further k hint.
+       metrics (silhouette, CH, DB, partition-BIC) and the true GMM BIC vote
+       within a small window around the anchor, and the gap statistic provides
+       a further k hint.
     3. k-means and GMM are fit at the chosen k and cross-checked with ARI/AMI
        against HDBSCAN.
     4. Within/between-cluster Vendi validate compactness and separation
@@ -594,7 +624,7 @@ def run_cluster_analysis(
         random_state=random_state,
         hdbscan_min_cluster_size=hdbscan_min_cluster_size,
         hdbscan_min_samples=hdbscan_min_samples,
-    )
+    ) #hdbscan fit on latent embeddings first by default
     hdbscan_quality = _compute_latent_quality_metrics(
         latent,
         metric_space,
@@ -604,7 +634,7 @@ def run_cluster_analysis(
         vendi_max_samples=vendi_max_samples,
         random_state=random_state,
     )
-    k_hdbscan = int(len(np.unique(hdbscan_labels[hdbscan_labels != -1])))
+    k_hdbscan = int(len(np.unique(hdbscan_labels[hdbscan_labels != -1]))) #k from hdbscan from non noise labels
     report["hdbscan"] = {
         "n_clusters": k_hdbscan,
         "n_noise": int(np.sum(hdbscan_labels == -1)),
@@ -630,7 +660,7 @@ def run_cluster_analysis(
     )
 
     metrics_by_k: Dict[str, Any] = {}
-    for candidate in candidates:
+    for candidate in candidates: #k candidate sweep for k-means
         kmeans_labels, _ = _cluster_latent_embeddings(
             latent,
             method="kmeans",
@@ -638,12 +668,19 @@ def run_cluster_analysis(
             random_state=random_state,
         )
         metrics_by_k[str(candidate)] = _partition_scores(latent, kmeans_labels)
+        metrics_by_k[str(candidate)]["gmm_bic"] = _gmm_bic(
+            latent,
+            candidate,
+            covariance_type=gmm_covariance_type,
+            random_state=random_state,
+        )
 
     direction = {
         "silhouette": "max",
         "calinski_harabasz": "max",
         "davies_bouldin": "min",
         "bic": "max",
+        "gmm_bic": "min",
     }
     votes: Dict[int, int] = {}
     for metric, sense in direction.items():
@@ -675,13 +712,13 @@ def run_cluster_analysis(
     selected_k = anchor
     selection_reason = "hdbscan_anchor"
     if votes:
-        selected_k = max(votes, key=lambda k: (votes[k], k == anchor))
+        selected_k = max(votes, key=lambda k: (votes[k], k == anchor)) #k selection based on votes
         if selected_k != anchor:
             selection_reason = "metric_majority"
 
     report["k_selection"] = {
         "anchor": int(anchor),
-        "anchor_source": "provided" if k_anchor is not None else "hdbscan",
+        "anchor_source": "provided" if k_anchor is not None else "hdbscan", #hdbscan result recorded
         "anchor_reliable": bool(k_hdbscan >= 2),
         "k_hdbscan": k_hdbscan,
         "candidates": [int(candidate) for candidate in candidates],
@@ -699,7 +736,7 @@ def run_cluster_analysis(
         n_clusters=selected_k,
         random_state=random_state,
     )
-    gmm_labels, _ = _cluster_latent_embeddings(
+    gmm_labels, _ = _cluster_latent_embeddings( #gmm fit on k
         latent,
         method="gmm",
         n_clusters=selected_k,

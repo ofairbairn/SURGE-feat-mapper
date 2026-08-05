@@ -32,7 +32,7 @@ from .data_preprocess import DataScaler
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
 from .tendency import _summarize_cluster_tendency, save_tendency_heatmap
 
-_LADDER_RUNGS = ("pca", "ae", "vae")
+_LADDER_RUNGS = ("pca", "ae", "vae") #ladder order
 _LADDER_MODEL_KEYS = {
     "pca": "sklearn.pca",
     "ae": "pytorch.autoencoder",
@@ -181,7 +181,7 @@ def run_mapper_workflow(
                 else None
             ),
         }
-        gate = _reconstruction_quality_gate(
+        gate = _reconstruction_quality_gate( #per rung gate evaluation
             rung,
             split_metrics["val"],
             spec.unsupervised_ladder_thresholds,
@@ -222,7 +222,7 @@ def run_mapper_workflow(
         selected_adapter = adapter
         selected_rung = rung
         selected_quality_sufficient = bool(gate["passed"])
-        if selected_quality_sufficient:
+        if selected_quality_sufficient: #stop climbing on first check that passes threshold
             break
 
     if selected_adapter is None or selected_rung is None:  # pragma: no cover
@@ -695,7 +695,7 @@ def _reconstruction_quality_gate(
     metric = str(thresholds.get("reconstruction_metric", "rmse")).strip().lower()
     if metric.startswith("recon_"):
         metric = metric.removeprefix("recon_")
-    if metric not in {"mse", "rmse", "mae"}:
+    if metric not in {"mse", "rmse", "mae"}: #metrics that are used in the gate
         raise ValueError(
             "unsupervised_ladder_thresholds.reconstruction_metric must be "
             "one of: mse, rmse, mae"
