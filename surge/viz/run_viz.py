@@ -34,6 +34,11 @@ from Mapper.tendency.hopkins_vat import (
     _summarize_cluster_tendency,
     _vat_reordering,
 )
+from Mapper.cluster.cluster import (
+    _cluster_latent_embeddings,
+    _compute_latent_quality_metrics,
+    _nearest_neighbor_preservation,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -167,158 +172,6 @@ def _compute_reconstruction_error(pred_df: pd.DataFrame) -> Optional[np.ndarray]
     if len(diffs) == 1:
         return np.sqrt(diffs[0])
     return np.sqrt(np.mean(np.column_stack(diffs), axis=1))
-
-
-def _nearest_neighbor_preservation(
-    X_ref: np.ndarray,
-    X_embed: np.ndarray,
-    *,
-    n_neighbors: int = 10,
-) -> Optional[float]:
-    from sklearn.neighbors import NearestNeighbors
-
-    n = min(len(X_ref), len(X_embed))
-    if n < 3:
-        return None
-    k = max(2, min(n_neighbors + 1, n))
-
-    nn_ref = NearestNeighbors(n_neighbors=k).fit(X_ref)
-    nn_emb = NearestNeighbors(n_neighbors=k).fit(X_embed)
-    ref_neighbors = nn_ref.kneighbors(return_distance=False)[:, 1:]
-    emb_neighbors = nn_emb.kneighbors(return_distance=False)[:, 1:]
-
-    overlaps = []
-    for ref_row, emb_row in zip(ref_neighbors, emb_neighbors):
-        inter = len(set(ref_row.tolist()).intersection(set(emb_row.tolist())))
-        overlaps.append(inter / max(1, len(ref_row)))
-    return float(np.mean(overlaps))
-
-
-def _compute_latent_quality_metrics(
-    latent: np.ndarray,
-    embedding: np.ndarray,
-    clusters: Optional[np.ndarray],
-    *,
-    n_neighbors: int = 10,
-) -> Dict[str, Any]:
-    from sklearn.manifold import trustworthiness
-    from sklearn.metrics import davies_bouldin_score, silhouette_score
-
-    metrics: Dict[str, Any] = {}
-    n = min(len(latent), len(embedding))
-    if n < 3:
-        metrics["trustworthiness"] = None
-        metrics["nearest_neighbor_preservation"] = None
-        metrics["silhouette"] = None
-        metrics["davies_bouldin"] = None
-        metrics["n_clusters"] = 0
-        metrics["noise_fraction"] = None
-        return metrics
-
-    k = min(max(2, n_neighbors), n - 1)
-    try:
-        metrics["trustworthiness"] = float(trustworthiness(latent, embedding, n_neighbors=k))
-    except Exception:
-        metrics["trustworthiness"] = None
-
-    try:
-        metrics["nearest_neighbor_preservation"] = _nearest_neighbor_preservation(
-            latent,
-            embedding,
-            n_neighbors=k,
-        )
-    except Exception:
-        metrics["nearest_neighbor_preservation"] = None
-
-    if clusters is None:
-        metrics["silhouette"] = None
-        metrics["davies_bouldin"] = None
-        metrics["n_clusters"] = 0
-        metrics["noise_fraction"] = None
-        return metrics
-
-    labels = np.asarray(clusters)
-    non_noise_mask = labels != -1
-    noise_fraction = 1.0 - float(np.mean(non_noise_mask))
-    valid_labels = labels[non_noise_mask]
-    valid_embedding = embedding[non_noise_mask]
-    unique_labels = np.unique(valid_labels)
-    metrics["n_clusters"] = int(len(unique_labels))
-    metrics["noise_fraction"] = noise_fraction
-    if len(unique_labels) < 2 or len(valid_embedding) <= len(unique_labels):
-        metrics["silhouette"] = None
-        metrics["davies_bouldin"] = None
-        return metrics
-
-    try:
-        metrics["silhouette"] = float(silhouette_score(valid_embedding, valid_labels))
-    except Exception:
-        metrics["silhouette"] = None
-    try:
-        metrics["davies_bouldin"] = float(davies_bouldin_score(valid_embedding, valid_labels))
-    except Exception:
-        metrics["davies_bouldin"] = None
-    return metrics
-
-def _cluster_latent_embeddings(
-    latent: np.ndarray,
-    *,
-    method: str = "hdbscan",
-    n_clusters: Optional[int] = None,
-    random_state: int = 42,
-    dbscan_eps: float = 0.5,
-    dbscan_min_samples: int = 5,
-    hdbscan_min_cluster_size: int = 20,
-    hdbscan_min_samples: Optional[int] = None,
-    agglomerative_linkage: str = "ward",
-) -> tuple[np.ndarray, Optional[np.ndarray]]:
-    latent = np.asarray(latent, dtype=np.float64)
-    n_samples = latent.shape[0]
-    if n_samples < 2 or method.lower() in {"", "none", "off", "no"}:
-        return np.full(n_samples, -1, dtype=int), None
-
-    method_normalized = method.lower().strip()
-    if method_normalized == "kmeans":
-        from sklearn.cluster import KMeans
-
-        n_clusters_eff = int(n_clusters or min(8, max(2, int(np.sqrt(n_samples)))))
-        n_clusters_eff = max(2, min(n_clusters_eff, n_samples))
-        clusterer = KMeans(n_clusters=n_clusters_eff, random_state=random_state, n_init="auto")
-        return clusterer.fit_predict(latent), None
-
-    if method_normalized == "dbscan":
-        from sklearn.cluster import DBSCAN
-
-        clusterer = DBSCAN(eps=dbscan_eps, min_samples=dbscan_min_samples)
-        return clusterer.fit_predict(latent), None
-
-    if method_normalized == "hdbscan":
-        try:
-            import hdbscan
-        except ImportError as exc:
-            raise ImportError("hdbscan is required for cluster_method='hdbscan'") from exc
-
-        clusterer = hdbscan.HDBSCAN(
-            min_cluster_size=hdbscan_min_cluster_size,
-            min_samples=hdbscan_min_samples,
-        )
-        return clusterer.fit_predict(latent), None
-
-    if method_normalized == "agglomerative":
-        from scipy.cluster.hierarchy import linkage
-        from sklearn.cluster import AgglomerativeClustering
-
-        n_clusters_eff = int(n_clusters or min(8, max(2, int(np.sqrt(n_samples)))))
-        n_clusters_eff = max(2, min(n_clusters_eff, n_samples))
-        clusterer = AgglomerativeClustering(n_clusters=n_clusters_eff, linkage=agglomerative_linkage)
-        labels = clusterer.fit_predict(latent)
-        linkage_matrix = linkage(latent, method=agglomerative_linkage)
-        return labels, linkage_matrix
-
-    raise ValueError(
-        f"Unsupported cluster_method={method!r}. Expected one of: none, kmeans, dbscan, hdbscan, agglomerative."
-    )
-
 
 def _save_tendency_heatmap(matrix: np.ndarray, *, out_png: Path, title: str) -> Optional[Path]:
     if matrix.size == 0:
