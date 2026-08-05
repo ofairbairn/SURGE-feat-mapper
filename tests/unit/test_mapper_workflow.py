@@ -51,7 +51,12 @@ def test_mapper_workflow_robustly_scales_from_training_split(
     summary = run_workflow(spec)
 
     assert summary["workflow_type"] == "mapper"
-    assert summary["status"] == "diversity_complete"
+    gate_passed = summary["cluster_tendency"]["gate_passed"]
+    assert summary["status"] == (
+        "clustering_ready" if gate_passed else "stopped_no_cluster_tendency"
+    )
+    assert summary["clustering_decision"]["proceed_to_clustering"] is gate_passed
+    assert summary["next_stage"] == ("clustering" if gate_passed else None)
     assert summary["representation_ladder"]["selected_rung"] == "pca"
     assert summary["representation_ladder"]["quality_sufficient"] is True
     assert len(summary["representation_ladder"]["rungs_run"]) == 1
@@ -77,7 +82,43 @@ def test_mapper_workflow_robustly_scales_from_training_split(
     assert (root / "diversity" / "vendi_diversity.json").is_file()
     assert (root / "diversity" / "vendi_q_profile.png").is_file()
     assert (root / "diversity" / "vendi_similarity_matrix.npz").is_file()
+    assert (root / "tendency" / "cluster_tendency.json").is_file()
+    assert (root / "tendency" / "vat_ivat_matrices.npz").is_file()
+    assert (root / "tendency" / "vat_heatmap.png").is_file()
+    assert (root / "tendency" / "ivat_heatmap.png").is_file()
     assert (root / "workflow_summary.json").is_file()
+
+
+@pytest.mark.parametrize("gate_passed", [True, False])
+def test_cluster_tendency_gate_controls_pipeline_decision(
+    gate_passed: bool,
+) -> None:
+    from Mapper.pipeline import (
+        _mapper_status_after_tendency,
+        decide_clustering_action,
+    )
+
+    decision = decide_clustering_action(
+        {
+            "gate_passed": gate_passed,
+            "gate_reason": "pass" if gate_passed else "hopkins_below_threshold",
+        }
+    )
+
+    assert decision["gate_passed"] is gate_passed
+    assert decision["proceed_to_clustering"] is gate_passed
+    assert decision["action"] == (
+        "proceed_to_clustering"
+        if gate_passed
+        else "stop_no_cluster_tendency"
+    )
+    assert decision["next_stage"] == ("clustering" if gate_passed else None)
+    assert decision["stop_reason"] == (
+        None if gate_passed else "hopkins_below_threshold"
+    )
+    assert _mapper_status_after_tendency(
+        decision, diversity_complete=True
+    ) == ("clustering_ready" if gate_passed else "stopped_no_cluster_tendency")
 
 
 class _FakeLadderAdapter:
@@ -166,6 +207,7 @@ def test_mapper_ladder_stops_or_climbs_at_each_quality_gate(
         run_tag=f"ladder_{selected}_{exhausted}",
         unsupervised_ladder_thresholds={"max_recon_rmse": 0.10},
         mapper_diversity={"enabled": False},
+        mapper_tendency={"enabled": False},
     )
 
     summary = pipeline.run_mapper_workflow(spec)
@@ -197,6 +239,7 @@ def test_mapper_ladder_runs_real_pca_ae_and_vae_backends(tmp_path: Path) -> None
         run_tag="real_ladder",
         unsupervised_ladder_thresholds={"max_recon_rmse": 0.0},
         mapper_diversity={"enabled": False},
+        mapper_tendency={"enabled": False},
         models=[
             {"key": "sklearn.pca", "params": {"n_components": 2}},
             {

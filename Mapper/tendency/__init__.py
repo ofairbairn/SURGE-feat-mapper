@@ -5,6 +5,7 @@ from .hopkins_vat import (
     _ivat_from_vat,
     _summarize_cluster_tendency,
     _vat_reordering,
+    save_tendency_heatmap,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "_ivat_from_vat",
     "_summarize_cluster_tendency",
     "_vat_reordering",
+    "save_tendency_heatmap",
 ]

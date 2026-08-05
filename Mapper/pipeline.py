@@ -29,6 +29,7 @@ from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
 
 from .data_preprocess import DataScaler
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
+from .tendency import _summarize_cluster_tendency, save_tendency_heatmap
 
 _LADDER_RUNGS = ("pca", "ae", "vae")
 _LADDER_MODEL_KEYS = {
@@ -61,7 +62,8 @@ def run_mapper_workflow(
     partition. Each rung is evaluated on validation reconstruction RMSE. The
     first rung meeting the configured threshold is selected; otherwise the
     runner climbs PCA -> AE -> VAE and retains the final VAE representation.
-    Clustering-tendency analysis intentionally remains a later pipeline stage.
+    The selected latent representation is then evaluated with Hopkins and
+    VAT/iVAT before the workflow is allowed to advance to clustering.
     """
     if spec.workflow_type != "mapper":
         raise ValueError(
@@ -241,6 +243,14 @@ def run_mapper_workflow(
         latent_payload["Z_test"] = Z_test
         latent_payload["test_index"] = raw.test_index
     np.savez_compressed(latent_path, **latent_payload)
+    Z_all, all_indices = _combine_latent_splits(
+        Z_train,
+        Z_val,
+        Z_test,
+        raw.train_index,
+        raw.val_index,
+        raw.test_index,
+    )
 
     diversity_report: Optional[Dict[str, Any]] = None
     diversity_artifacts: Dict[str, str] = {}
@@ -259,14 +269,6 @@ def run_mapper_workflow(
         max_samples_value = diversity_config.get("max_samples", 2_000)
         max_samples = (
             None if max_samples_value is None else int(max_samples_value)
-        )
-        Z_all, all_indices = _combine_latent_splits(
-            Z_train,
-            Z_val,
-            Z_test,
-            raw.train_index,
-            raw.val_index,
-            raw.test_index,
         )
         diversity_result = compute_vendi_diversity(
             Z_all,
@@ -307,11 +309,104 @@ def run_mapper_workflow(
             flush=True,
         )
 
+    tendency_report: Optional[Dict[str, Any]] = None
+    tendency_decision: Optional[Dict[str, Any]] = None
+    tendency_artifacts: Dict[str, str] = {}
+    tendency_config = dict(spec.mapper_tendency)
+    if bool(tendency_config.get("enabled", True)):
+        tendency_max_samples_value = tendency_config.get("max_samples", 1_000)
+        tendency_max_samples = (
+            None
+            if tendency_max_samples_value is None
+            else int(tendency_max_samples_value)
+        )
+        tendency_random_state = int(
+            tendency_config.get("random_state", spec.seed)
+        )
+        tendency_positions = _subsample_positions(
+            len(Z_all),
+            max_samples=tendency_max_samples,
+            random_state=tendency_random_state,
+        )
+        Z_tendency = Z_all[tendency_positions]
+        tendency_summary = _summarize_cluster_tendency(
+            Z_tendency,
+            hopkins_threshold=float(
+                tendency_config.get("hopkins_threshold", 0.55)
+            ),
+            sample_size=tendency_config.get("hopkins_sample_size"),
+            random_state=tendency_random_state,
+        )
+        tendency_decision = decide_clustering_action(tendency_summary)
+        tendency_report = {
+            key: value
+            for key, value in tendency_summary.items()
+            if key not in {"vat_matrix", "ivat_matrix"}
+        }
+        tendency_report["embedding"] = {
+            "space": "selected_model_latent_z",
+            "selected_representation": selected_rung,
+            "scope": "train_val_test",
+            "n_samples_total": int(len(Z_all)),
+            "n_samples_used": int(len(Z_tendency)),
+            "subsampled": bool(len(Z_tendency) < len(Z_all)),
+            "max_samples": tendency_max_samples,
+            "random_state": tendency_random_state,
+        }
+        tendency_report["decision"] = tendency_decision
+
+        tendency_dir = paths.root / "tendency"
+        tendency_dir.mkdir(parents=True, exist_ok=True)
+        tendency_report_path = tendency_dir / "cluster_tendency.json"
+        with tendency_report_path.open("w", encoding="utf-8") as handle:
+            json.dump(tendency_report, handle, indent=2)
+        tendency_matrices_path = tendency_dir / "vat_ivat_matrices.npz"
+        np.savez_compressed(
+            tendency_matrices_path,
+            vat_matrix=np.asarray(tendency_summary["vat_matrix"]),
+            ivat_matrix=np.asarray(tendency_summary["ivat_matrix"]),
+            sample_index=all_indices[tendency_positions],
+            vat_order=np.asarray(tendency_summary["vat_order"], dtype=np.int64),
+            vat_parents=np.asarray(
+                tendency_summary["vat_parents"], dtype=np.int64
+            ),
+        )
+        vat_plot_path = save_tendency_heatmap(
+            tendency_summary["vat_matrix"],
+            tendency_dir / "vat_heatmap.png",
+            title=f"{selected_rung.upper()} latent VAT",
+        )
+        ivat_plot_path = save_tendency_heatmap(
+            tendency_summary["ivat_matrix"],
+            tendency_dir / "ivat_heatmap.png",
+            title=f"{selected_rung.upper()} latent iVAT",
+        )
+        tendency_artifacts = {
+            "report": posix_str(tendency_report_path),
+            "matrices": posix_str(tendency_matrices_path),
+            "vat_heatmap": posix_str(vat_plot_path),
+            "ivat_heatmap": posix_str(ivat_plot_path),
+        }
+        hopkins_text = (
+            "undefined"
+            if tendency_report["hopkins"] is None
+            else f"{tendency_report['hopkins']:.6f}"
+        )
+        print(
+            "[Mapper tendency] "
+            f"Hopkins={hopkins_text}, "
+            f"threshold={tendency_report['hopkins_threshold']:.6f}: "
+            f"{tendency_decision['action']}",
+            flush=True,
+        )
+
     metrics_payload: Dict[str, Any] = {
         "representation_ladder": ladder_results,
     }
     if diversity_report is not None:
         metrics_payload["diversity"] = diversity_report
+    if tendency_report is not None:
+        metrics_payload["cluster_tendency"] = tendency_report
     save_metrics(metrics_payload, paths)
 
     split_sizes = {
@@ -321,10 +416,9 @@ def run_mapper_workflow(
     }
     summary: Dict[str, Any] = {
         "workflow_type": "mapper",
-        "status": (
-            "diversity_complete"
-            if diversity_report is not None
-            else "representation_complete"
+        "status": _mapper_status_after_tendency(
+            tendency_decision,
+            diversity_complete=diversity_report is not None,
         ),
         "dataset": dataset.summary(),
         "input_columns": list(dataset.input_columns),
@@ -350,7 +444,13 @@ def run_mapper_workflow(
             ),
         },
         "diversity": diversity_report,
-        "next_stage": "clustering_tendency",
+        "cluster_tendency": tendency_report,
+        "clustering_decision": tendency_decision,
+        "next_stage": (
+            tendency_decision["next_stage"]
+            if tendency_decision is not None
+            else "clustering_tendency"
+        ),
         "artifacts": {
             "root": posix_str(paths.root),
             "scaler": posix_str(scaler_path),
@@ -358,6 +458,7 @@ def run_mapper_workflow(
             "latent_splits": posix_str(latent_path),
             "metrics": posix_str(paths.metrics_file),
             "diversity": diversity_artifacts,
+            "tendency": tendency_artifacts,
             "spec": posix_str(paths.spec_file),
             "summary": posix_str(paths.summary_file),
         },
@@ -387,6 +488,71 @@ def _combine_latent_splits(
     except TypeError:
         order = np.argsort(all_indices.astype(str))
     return Z_all[order], all_indices[order]
+
+
+def _subsample_positions(
+    n_samples: int,
+    *,
+    max_samples: Optional[int],
+    random_state: int,
+) -> np.ndarray:
+    """Choose deterministic row positions for quadratic VAT/iVAT diagnostics."""
+    if n_samples < 1:
+        raise ValueError("Cluster tendency requires at least one latent vector")
+    if max_samples is None or max_samples >= n_samples:
+        return np.arange(n_samples, dtype=np.int64)
+    if max_samples < 1:
+        raise ValueError("mapper_tendency.max_samples must be at least 1")
+    rng = np.random.default_rng(random_state)
+    return np.sort(
+        rng.choice(n_samples, size=max_samples, replace=False)
+    ).astype(np.int64)
+
+
+def decide_clustering_action(
+    tendency_summary: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Convert the Hopkins gate result into an explicit pipeline decision."""
+    if "gate_passed" not in tendency_summary:
+        raise ValueError("Cluster tendency summary is missing 'gate_passed'")
+
+    gate_passed = bool(tendency_summary["gate_passed"])
+    return {
+        "gate_passed": gate_passed,
+        "proceed_to_clustering": gate_passed,
+        "action": (
+            "proceed_to_clustering"
+            if gate_passed
+            else "stop_no_cluster_tendency"
+        ),
+        "next_stage": "clustering" if gate_passed else None,
+        "stop_reason": (
+            None
+            if gate_passed
+            else str(
+                tendency_summary.get(
+                    "gate_reason", "cluster_tendency_gate_failed"
+                )
+            )
+        ),
+    }
+
+
+def _mapper_status_after_tendency(
+    tendency_decision: Optional[Mapping[str, Any]],
+    *,
+    diversity_complete: bool,
+) -> str:
+    """Report the Mapper stage reached after applying the tendency gate."""
+    if tendency_decision is None:
+        return (
+            "diversity_complete"
+            if diversity_complete
+            else "representation_complete"
+        )
+    if bool(tendency_decision["proceed_to_clustering"]):
+        return "clustering_ready"
+    return "stopped_no_cluster_tendency"
 
 
 def _resolve_ladder_model(
@@ -473,4 +639,4 @@ def _default_mapper_run_tag(file_path: Optional[Path]) -> str:
     return f"{prefix}_mapper_{timestamp}"
 
 
-__all__ = ["run_mapper_workflow"]
+__all__ = ["decide_clustering_action", "run_mapper_workflow"]

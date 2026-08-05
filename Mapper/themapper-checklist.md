@@ -46,7 +46,7 @@
 
 ## Cross-cutting discipline (apply throughout, not phase-specific)
 - [ ] Always cluster and compute Vendi Score on the latent `z` — never on the 2-D UMAP/t-SNE picture
-- [ ] Check cluster tendency (Hopkins/VAT) before clustering; stop and report "no structure" if the data is random
+- [x] Check cluster tendency (Hopkins/VAT) before clustering; stop and report "no structure" if the data is random
 - [ ] Prefer HDBSCAN (no forced k) before methods that require guessing k
 - [ ] If a k must be chosen, confirm agreement across multiple indices and allow k = 1
 - [ ] Treat anomaly output as a ranked list with reasons, never a binary yes/no verdict
@@ -58,7 +58,7 @@
 - [ ] Features standardized first
 - [ ] Correct encoder/adapter chosen (CNN for images/2-D fields, MLP for vectors)
 - [ ] Clustering happens in `z`, not on the UMAP/t-SNE plot
-- [ ] Cluster tendency checked before clustering
+- [x] Cluster tendency checked before clustering
 - [ ] HDBSCAN tried before forcing a `k`
 - [ ] If `k` was picked, multiple indices agree and k = 1 was allowed
 - [ ] Cluster stability checked under resampling

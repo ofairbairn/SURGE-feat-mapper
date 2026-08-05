@@ -18,6 +18,14 @@ workflow:
     kernel: rbf
     max_samples: 2000
     save_similarity_matrix: true
+  # Hopkins is the automated clustering gate. VAT/iVAT are saved for visual
+  # inspection; max_samples bounds their O(n^2) distance matrices.
+  mapper_tendency:
+    enabled: true
+    hopkins_threshold: 0.55
+    hopkins_sample_size: null
+    max_samples: 1000
+    random_state: 42
 
   models:
     - key: sklearn.pca

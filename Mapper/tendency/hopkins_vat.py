@@ -6,7 +6,8 @@ hopkins statistic, VAT/iVAT
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
@@ -163,3 +164,44 @@ def _summarize_cluster_tendency(
         "vat_matrix": vat_matrix,
         "ivat_matrix": ivat_matrix,
     }
+
+
+def save_tendency_heatmap(
+    matrix: np.ndarray,
+    output_path: Union[str, Path],
+    *,
+    title: str,
+) -> Path:
+    """Save a VAT or iVAT matrix as an inspectable heatmap."""
+    import matplotlib.pyplot as plt
+
+    matrix = np.asarray(matrix, dtype=np.float64)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1] or matrix.size == 0:
+        raise ValueError("Tendency heatmap requires a non-empty square matrix")
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig, axis = plt.subplots(figsize=(6.0, 5.0))
+    image = axis.imshow(
+        matrix,
+        cmap="viridis",
+        aspect="auto",
+        interpolation="nearest",
+    )
+    axis.set_title(title)
+    axis.set_xlabel("VAT-reordered sample index")
+    axis.set_ylabel("VAT-reordered sample index")
+    fig.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+__all__ = [
+    "_compute_hopkins_statistic",
+    "_ivat_from_vat",
+    "_summarize_cluster_tendency",
+    "_vat_reordering",
+    "save_tendency_heatmap",
+]
