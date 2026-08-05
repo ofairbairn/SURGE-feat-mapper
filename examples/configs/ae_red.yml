@@ -7,10 +7,9 @@ workflow:
   val_fraction: 0.1
   seed: 42
   output_dir: runs
-  # Mapper ladder gate keys (val RMSE). PCA starts at 0.0 so it always climbs
-  # to the autoencoder rung; lower the per-rung limit to force a deeper climb.
+  # Mapper ladder gate keys (val RMSE).
   unsupervised_ladder_thresholds:
-    pca_max_recon_rmse: 0.0
+    pca_max_recon_rmse: 0.10
     ae_max_recon_rmse: 0.10
     vae_max_recon_rmse: 0.10
   mapper_diversity:
