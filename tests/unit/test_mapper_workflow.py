@@ -49,14 +49,19 @@ def test_mapper_workflow_robustly_scales_from_training_split(
     )
 
     summary = run_workflow(spec)
+    root = Path(summary["artifacts"]["root"])
 
     assert summary["workflow_type"] == "mapper"
     gate_passed = summary["cluster_tendency"]["gate_passed"]
-    assert summary["status"] == (
-        "clustering_ready" if gate_passed else "stopped_no_cluster_tendency"
-    )
+    if gate_passed:
+        assert summary["status"] == "clustering_complete"
+        assert summary["clustering"]["status"] == "complete"
+        assert (root / "clustering" / "cluster_analysis.json").is_file()
+    else:
+        assert summary["status"] == "stopped_no_cluster_tendency"
+        assert summary["clustering"] is None
     assert summary["clustering_decision"]["proceed_to_clustering"] is gate_passed
-    assert summary["next_stage"] == ("clustering" if gate_passed else None)
+    assert summary["next_stage"] is None
     assert summary["representation_ladder"]["selected_rung"] == "pca"
     assert summary["representation_ladder"]["quality_sufficient"] is True
     assert len(summary["representation_ladder"]["rungs_run"]) == 1
@@ -75,7 +80,6 @@ def test_mapper_workflow_robustly_scales_from_training_split(
             np.median(splits["X_train"], axis=0), np.zeros(2), atol=1e-12
         )
 
-    root = Path(summary["artifacts"]["root"])
     assert (root / "spec.yaml").is_file()
     assert (root / "metrics.json").is_file()
     assert (root / "mapper_latent_splits.npz").is_file()
@@ -119,6 +123,44 @@ def test_cluster_tendency_gate_controls_pipeline_decision(
     assert _mapper_status_after_tendency(
         decision, diversity_complete=True
     ) == ("clustering_ready" if gate_passed else "stopped_no_cluster_tendency")
+
+
+def test_cluster_tendency_gate_halts_when_hopkins_undefined() -> None:
+    from Mapper.pipeline import (
+        _mapper_status_after_tendency,
+        decide_clustering_action,
+    )
+
+    decision = decide_clustering_action(
+        {
+            "gate_passed": False,
+            "gate_reason": "hopkins_undefined",
+        }
+    )
+
+    assert decision["gate_passed"] is False
+    assert decision["proceed_to_clustering"] is False
+    assert decision["action"] == "stop_hopkins_undefined"
+    assert decision["next_stage"] is None
+    assert decision["stop_reason"] == "hopkins_undefined"
+    assert decision["message"] == (
+        "hopkins statistic undefined: check for zero distances "
+        "or identical coordinates"
+    )
+    assert _mapper_status_after_tendency(
+        decision, diversity_complete=True
+    ) == "stopped_hopkins_undefined"
+
+
+def test_cluster_tendency_undefined_on_degenerate_latent() -> None:
+    from Mapper.tendency import _summarize_cluster_tendency
+
+    degenerate = np.full((12, 3), 5.0, dtype=np.float64)
+    summary = _summarize_cluster_tendency(degenerate)
+
+    assert summary["hopkins"] is None
+    assert summary["gate_passed"] is False
+    assert summary["gate_reason"] == "hopkins_undefined"
 
 
 class _FakeLadderAdapter:

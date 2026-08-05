@@ -228,6 +228,8 @@ def _compute_latent_quality_metrics(
     gap_n_references: int = 5,
     vendi_max_samples: Optional[int] = 200,
     random_state: int = 42,
+    compute_gap: bool = True,
+    compute_vendi: bool = True,
 ) -> Dict[str, Any]:
     from sklearn.manifold import trustworthiness
     from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score, silhouette_score
@@ -240,13 +242,7 @@ def _compute_latent_quality_metrics(
         metrics["silhouette"] = None
         metrics["davies_bouldin"] = None
         metrics["calinski_harabasz"] = None
-        metrics["gap_statistic"] = {
-            "optimal_k": None,
-            "k_min": 2,
-            "k_max": int(gap_k_max),
-            "gap_values": [],
-            "gap_sds": [],
-        }
+        metrics["gap_statistic"] = _empty_gap_statistic(gap_k_max) if compute_gap else None
         metrics["bic"] = None
         metrics["vendi_per_cluster"] = None
         metrics["n_clusters"] = 0
@@ -272,13 +268,7 @@ def _compute_latent_quality_metrics(
         metrics["silhouette"] = None
         metrics["davies_bouldin"] = None
         metrics["calinski_harabasz"] = None
-        metrics["gap_statistic"] = {
-            "optimal_k": None,
-            "k_min": 2,
-            "k_max": int(gap_k_max),
-            "gap_values": [],
-            "gap_sds": [],
-        }
+        metrics["gap_statistic"] = _empty_gap_statistic(gap_k_max) if compute_gap else None
         metrics["bic"] = None
         metrics["vendi_per_cluster"] = None
         metrics["n_clusters"] = 0
@@ -298,13 +288,7 @@ def _compute_latent_quality_metrics(
         metrics["silhouette"] = None
         metrics["davies_bouldin"] = None
         metrics["calinski_harabasz"] = None
-        metrics["gap_statistic"] = {
-            "optimal_k": None,
-            "k_min": 2,
-            "k_max": int(gap_k_max),
-            "gap_values": [],
-            "gap_sds": [],
-        }
+        metrics["gap_statistic"] = _empty_gap_statistic(gap_k_max) if compute_gap else None
         metrics["bic"] = None
         metrics["vendi_per_cluster"] = None
         return metrics
@@ -322,18 +306,26 @@ def _compute_latent_quality_metrics(
     except Exception:
         metrics["calinski_harabasz"] = None
 
-    metrics["gap_statistic"] = _compute_gap_statistic(
-        valid_latent,
-        k_max=gap_k_max,
-        n_references=gap_n_references,
-        random_state=random_state,
+    metrics["gap_statistic"] = (
+        _compute_gap_statistic(
+            valid_latent,
+            k_max=gap_k_max,
+            n_references=gap_n_references,
+            random_state=random_state,
+        )
+        if compute_gap
+        else None
     )
     metrics["bic"] = _gaussian_partition_bic(valid_latent, valid_labels)
-    metrics["vendi_per_cluster"] = _compute_vendi_per_cluster(
-        valid_latent,
-        valid_labels,
-        max_samples=vendi_max_samples,
-        random_state=random_state,
+    metrics["vendi_per_cluster"] = (
+        _compute_vendi_per_cluster(
+            valid_latent,
+            valid_labels,
+            max_samples=vendi_max_samples,
+            random_state=random_state,
+        )
+        if compute_vendi
+        else None
     )
     return metrics
 
@@ -410,3 +402,399 @@ def _cluster_latent_embeddings(
         f"Unsupported cluster_method={method!r}. "
         "Expected one of: none, kmeans, dbscan, hdbscan, gmm, agglomerative."
     )
+
+
+def _empty_gap_statistic(k_max: int = 8) -> Dict[str, Any]:
+    """Empty gap-statistic payload used when the gap statistic is not computed."""
+    return {
+        "optimal_k": None,
+        "k_min": 2,
+        "k_max": int(k_max),
+        "gap_values": [],
+        "gap_sds": [],
+    }
+
+
+def _partition_scores(
+    latent: np.ndarray,
+    labels: np.ndarray,
+) -> Dict[str, Optional[float]]:
+    """Compact partition quality scores (silhouette, CH, DB, BIC)."""
+    from sklearn.metrics import (
+        calinski_harabasz_score,
+        davies_bouldin_score,
+        silhouette_score,
+    )
+
+    latent = np.asarray(latent, dtype=np.float64)
+    labels = np.asarray(labels)
+    mask = labels != -1
+    valid_labels = labels[mask]
+    valid_latent = latent[mask]
+    unique_labels = np.unique(valid_labels)
+    scores: Dict[str, Optional[float]] = {
+        "silhouette": None,
+        "calinski_harabasz": None,
+        "davies_bouldin": None,
+        "bic": None,
+    }
+    if len(unique_labels) < 2 or len(valid_latent) <= len(unique_labels):
+        return scores
+    for name, func in (
+        ("silhouette", silhouette_score),
+        ("calinski_harabasz", calinski_harabasz_score),
+        ("davies_bouldin", davies_bouldin_score),
+    ):
+        try:
+            scores[name] = float(func(valid_latent, valid_labels))
+        except Exception:
+            scores[name] = None
+    scores["bic"] = _gaussian_partition_bic(valid_latent, valid_labels)
+    return scores
+
+
+def _label_agreement(
+    a: np.ndarray,
+    b: np.ndarray,
+) -> Optional[Dict[str, Optional[float]]]:
+    """Adjusted Rand Index and mutual information between two labelings."""
+    from sklearn.metrics import adjusted_mutual_info_score, adjusted_rand_score
+
+    a = np.asarray(a)
+    b = np.asarray(b)
+    if a.shape != b.shape or len(a) == 0:
+        return None
+    try:
+        ari = float(adjusted_rand_score(a, b))
+    except Exception:
+        ari = None
+    try:
+        ami = float(adjusted_mutual_info_score(a, b))
+    except Exception:
+        ami = None
+    return {"ari": ari, "ami": ami}
+
+
+def _compute_global_vendi(
+    latent: np.ndarray,
+    *,
+    max_samples: Optional[int] = 200,
+    random_state: int = 42,
+) -> Optional[float]:
+    """Vendi Score V1 on the whole latent (reference for cluster ratios)."""
+    try:
+        from vendi_score import vendi
+    except ImportError:
+        return None
+    from Mapper.diversity.vendi_q_diversity import build_rbf_similarity_matrix
+
+    latent = np.asarray(latent, dtype=np.float64)
+    if len(latent) < 2:
+        return None
+    if max_samples is not None and len(latent) > max_samples:
+        rng = np.random.default_rng(random_state)
+        positions = rng.choice(len(latent), size=max_samples, replace=False)
+        latent = latent[positions]
+    try:
+        similarity, _kernel = build_rbf_similarity_matrix(latent)
+        return float(vendi.score_K(similarity, q=1))
+    except Exception:
+        return None
+
+
+def _compute_vendi_between_clusters(
+    latent: np.ndarray,
+    labels: np.ndarray,
+    *,
+    random_state: int = 42,
+) -> Optional[Dict[str, Any]]:
+    """Vendi Score V1 on cluster centroids (how distinct the clusters are)."""
+    try:
+        from vendi_score import vendi
+    except ImportError:
+        return None
+    from Mapper.diversity.vendi_q_diversity import build_rbf_similarity_matrix
+
+    latent = np.asarray(latent, dtype=np.float64)
+    labels = np.asarray(labels)
+    centroids: List[np.ndarray] = []
+    cluster_ids: List[int] = []
+    for cluster_id in np.unique(labels):
+        if int(cluster_id) == -1:
+            continue
+        points = latent[labels == cluster_id]
+        if len(points) == 0:
+            continue
+        centroids.append(points.mean(axis=0))
+        cluster_ids.append(int(cluster_id))
+    if len(centroids) < 2:
+        return None
+    try:
+        similarity, _kernel = build_rbf_similarity_matrix(
+            np.asarray(centroids, dtype=np.float64)
+        )
+        vendi_score = float(vendi.score_K(similarity, q=1))
+    except Exception:
+        return None
+    return {
+        "vendi_score": vendi_score,
+        "n_clusters": len(centroids),
+        "cluster_ids": [str(cluster_id) for cluster_id in cluster_ids],
+    }
+
+
+def run_cluster_analysis(
+    latent: np.ndarray,
+    *,
+    embedding: Optional[np.ndarray] = None,
+    k_anchor: Optional[int] = None,
+    k_max: int = 10,
+    k_window: int = 1,
+    gap_k_max: int = 8,
+    gap_n_references: int = 5,
+    vendi_max_samples: Optional[int] = 200,
+    random_state: int = 42,
+    hdbscan_min_cluster_size: int = 20,
+    hdbscan_min_samples: Optional[int] = None,
+    gmm_covariance_type: str = "full",
+) -> Dict[str, Any]:
+    """Cluster a latent embedding with an HDBSCAN-anchored consensus workflow.
+
+    1. HDBSCAN always runs first (density-based, no k required).
+    2. The HDBSCAN cluster count anchors k for k-means and GMM; the internal
+       metrics (silhouette, CH, DB, BIC) vote within a small window around the
+       anchor, and the gap statistic provides a further k hint.
+    3. k-means and GMM are fit at the chosen k and cross-checked with ARI/AMI
+       against HDBSCAN.
+    4. Within/between-cluster Vendi validate compactness and separation
+       relative to the global Vendi score.
+    """
+    latent = np.asarray(latent, dtype=np.float64)
+    n_samples = len(latent)
+    if latent.ndim != 2 or n_samples < 2 or latent.shape[1] == 0:
+        return {"status": "insufficient_data", "n_samples": int(n_samples)}
+
+    metric_space = (
+        np.asarray(embedding, dtype=np.float64)
+        if embedding is not None and len(embedding) == n_samples
+        else latent
+    )
+
+    report: Dict[str, Any] = {
+        "status": "complete",
+        "method": "hdbscan_anchored_consensus",
+        "n_samples": int(n_samples),
+        "latent_dim": int(latent.shape[1]),
+    }
+
+    # 1. HDBSCAN always runs first (density-based, no k required).
+    hdbscan_labels, _ = _cluster_latent_embeddings(
+        latent,
+        method="hdbscan",
+        random_state=random_state,
+        hdbscan_min_cluster_size=hdbscan_min_cluster_size,
+        hdbscan_min_samples=hdbscan_min_samples,
+    )
+    hdbscan_quality = _compute_latent_quality_metrics(
+        latent,
+        metric_space,
+        hdbscan_labels,
+        gap_k_max=gap_k_max,
+        gap_n_references=gap_n_references,
+        vendi_max_samples=vendi_max_samples,
+        random_state=random_state,
+    )
+    k_hdbscan = int(len(np.unique(hdbscan_labels[hdbscan_labels != -1])))
+    report["hdbscan"] = {
+        "n_clusters": k_hdbscan,
+        "n_noise": int(np.sum(hdbscan_labels == -1)),
+        "noise_fraction": float(np.mean(hdbscan_labels == -1)),
+        "quality": hdbscan_quality,
+    }
+
+    # 2. Anchor k from HDBSCAN (or caller) and refine with the metrics.
+    k_upper = max(2, min(int(k_max), n_samples - 1))
+    anchor = (
+        int(k_anchor)
+        if k_anchor is not None
+        else (k_hdbscan if k_hdbscan >= 2 else 2)
+    )
+    anchor = max(2, min(anchor, k_upper))
+    window = max(0, int(k_window))
+    candidates = sorted(
+        {
+            max(2, anchor - window),
+            anchor,
+            min(k_upper, anchor + window),
+        }
+    )
+
+    metrics_by_k: Dict[str, Any] = {}
+    for candidate in candidates:
+        kmeans_labels, _ = _cluster_latent_embeddings(
+            latent,
+            method="kmeans",
+            n_clusters=candidate,
+            random_state=random_state,
+        )
+        metrics_by_k[str(candidate)] = _partition_scores(latent, kmeans_labels)
+
+    direction = {
+        "silhouette": "max",
+        "calinski_harabasz": "max",
+        "davies_bouldin": "min",
+        "bic": "max",
+    }
+    votes: Dict[int, int] = {}
+    for metric, sense in direction.items():
+        scored = {
+            candidate: metrics_by_k[str(candidate)][metric]
+            for candidate in candidates
+            if metrics_by_k[str(candidate)].get(metric) is not None
+        }
+        if not scored:
+            continue
+        best = (
+            max(scored, key=scored.get)
+            if sense == "max"
+            else min(scored, key=scored.get)
+        )
+        votes[best] = votes.get(best, 0) + 1
+
+    gap_report = _compute_gap_statistic(
+        latent,
+        k_min=2,
+        k_max=k_upper,
+        n_references=gap_n_references,
+        random_state=random_state,
+    )
+    gap_optimal = gap_report["optimal_k"]
+    if gap_optimal is not None and int(gap_optimal) in candidates:
+        votes[int(gap_optimal)] = votes.get(int(gap_optimal), 0) + 1
+
+    selected_k = anchor
+    selection_reason = "hdbscan_anchor"
+    if votes:
+        selected_k = max(votes, key=lambda k: (votes[k], k == anchor))
+        if selected_k != anchor:
+            selection_reason = "metric_majority"
+
+    report["k_selection"] = {
+        "anchor": int(anchor),
+        "anchor_source": "provided" if k_anchor is not None else "hdbscan",
+        "anchor_reliable": bool(k_hdbscan >= 2),
+        "k_hdbscan": k_hdbscan,
+        "candidates": [int(candidate) for candidate in candidates],
+        "metrics_by_k": metrics_by_k,
+        "gap_statistic": gap_report,
+        "votes": {str(k): v for k, v in votes.items()},
+        "selected_k": int(selected_k),
+        "selection_reason": selection_reason,
+    }
+
+    # 3. k-means and GMM at the selected k.
+    kmeans_labels, _ = _cluster_latent_embeddings(
+        latent,
+        method="kmeans",
+        n_clusters=selected_k,
+        random_state=random_state,
+    )
+    gmm_labels, _ = _cluster_latent_embeddings(
+        latent,
+        method="gmm",
+        n_clusters=selected_k,
+        random_state=random_state,
+        gmm_covariance_type=gmm_covariance_type,
+    )
+    report["kmeans"] = {
+        "n_clusters": int(selected_k),
+        "quality": _compute_latent_quality_metrics(
+            latent,
+            metric_space,
+            kmeans_labels,
+            gap_k_max=gap_k_max,
+            gap_n_references=gap_n_references,
+            vendi_max_samples=vendi_max_samples,
+            random_state=random_state,
+        ),
+    }
+    report["gmm"] = {
+        "n_clusters": int(selected_k),
+        "quality": _compute_latent_quality_metrics(
+            latent,
+            metric_space,
+            gmm_labels,
+            gap_k_max=gap_k_max,
+            gap_n_references=gap_n_references,
+            vendi_max_samples=vendi_max_samples,
+            random_state=random_state,
+        ),
+    }
+
+    # 4. Cross-method agreement.
+    report["agreement"] = {
+        "hdbscan_vs_kmeans": _label_agreement(hdbscan_labels, kmeans_labels),
+        "hdbscan_vs_gmm": _label_agreement(hdbscan_labels, gmm_labels),
+        "kmeans_vs_gmm": _label_agreement(kmeans_labels, gmm_labels),
+    }
+
+    # 5. Vendi validation: within/between clusters vs the global score.
+    global_vendi = _compute_global_vendi(
+        latent,
+        max_samples=vendi_max_samples,
+        random_state=random_state,
+    )
+    within: Dict[str, Optional[Dict[str, Any]]] = {
+        name: _compute_vendi_per_cluster(
+            latent,
+            labels,
+            max_samples=vendi_max_samples,
+            random_state=random_state,
+        )
+        for name, labels in (
+            ("hdbscan", hdbscan_labels),
+            ("kmeans", kmeans_labels),
+            ("gmm", gmm_labels),
+        )
+    }
+    between: Dict[str, Optional[Dict[str, Any]]] = {
+        name: _compute_vendi_between_clusters(
+            latent,
+            labels,
+            random_state=random_state,
+        )
+        for name, labels in (
+            ("hdbscan", hdbscan_labels),
+            ("kmeans", kmeans_labels),
+            ("gmm", gmm_labels),
+        )
+    }
+    ratios: Dict[str, Any] = {}
+    for name in ("hdbscan", "kmeans", "gmm"):
+        per_cluster = (within.get(name) or {}).get("per_cluster") or {}
+        mean_within = (
+            float(np.mean(list(per_cluster.values()))) if per_cluster else None
+        )
+        between_score = (between.get(name) or {}).get("vendi_score")
+        ratios[name] = {
+            "mean_within_vendi": mean_within,
+            "between_vendi": between_score,
+            "within_over_global": (
+                mean_within / global_vendi
+                if mean_within is not None and global_vendi
+                else None
+            ),
+            "between_over_global": (
+                between_score / global_vendi
+                if between_score is not None and global_vendi
+                else None
+            ),
+        }
+    report["vendi"] = {
+        "global_vendi": global_vendi,
+        "within_per_cluster": within,
+        "between_clusters": between,
+        "ratios": ratios,
+    }
+
+    return report

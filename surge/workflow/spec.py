@@ -84,6 +84,9 @@ class SurrogateWorkflowSpec:
     mapper_diversity: Dict[str, Any] = field(default_factory=dict)
     # Hopkins/VAT/iVAT settings and automated clustering gate for Mapper.
     mapper_tendency: Dict[str, Any] = field(default_factory=dict)
+    # HDBSCAN-anchored consensus clustering (HDBSCAN -> k-means + GMM with a
+    # metric vote around the HDBSCAN k, then Vendi per-cluster validation).
+    mapper_clustering: Dict[str, Any] = field(default_factory=dict)
     # HDF5 leaf name under run*/sparc_* (default: sdata_pertfields_grid_complex_v2.h5).
     # Use sdata_complex_v2.h5 on CFS-style trees where that file holds nonsymmetric δp modes.
     batch_dir_filename: Optional[str] = None

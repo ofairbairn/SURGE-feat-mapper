@@ -26,6 +26,22 @@ workflow:
     hopkins_sample_size: null
     max_samples: 1000
     random_state: 42
+  # Runs only when the Hopkins gate passes. HDBSCAN always runs first and
+  # anchors k; silhouette/CH/DB/BIC vote within k_window of that anchor and
+  # the gap statistic adds a hint. k-means and GMM are then fit at selected_k
+  # and validated with ARI/AMI plus within/between-cluster Vendi.
+  mapper_clustering:
+    enabled: true
+    k_anchor: null
+    k_max: 10
+    k_window: 1
+    gap_k_max: 8
+    gap_n_references: 5
+    vendi_max_samples: 200
+    hdbscan_min_cluster_size: 20
+    hdbscan_min_samples: null
+    gmm_covariance_type: full
+    random_state: 42
 
   models:
     - key: sklearn.pca

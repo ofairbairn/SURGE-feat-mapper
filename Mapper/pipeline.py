@@ -27,6 +27,7 @@ from surge.model.registry import MODEL_REGISTRY
 from surge.utils import posix_str
 from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
 
+from .cluster import run_cluster_analysis
 from .data_preprocess import DataScaler
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
 from .tendency import _summarize_cluster_tendency, save_tendency_heatmap
@@ -399,6 +400,81 @@ def run_mapper_workflow(
             f"{tendency_decision['action']}",
             flush=True,
         )
+        if tendency_decision.get("message"):
+            print(
+                f"[Mapper tendency] {tendency_decision['message']}",
+                flush=True,
+            )
+
+    clustering_report: Optional[Dict[str, Any]] = None
+    clustering_artifacts: Dict[str, str] = {}
+    clustering_config = dict(spec.mapper_clustering)
+    if (
+        tendency_decision is not None
+        and bool(tendency_decision["proceed_to_clustering"])
+        and bool(clustering_config.get("enabled", True))
+    ):
+        try:
+            clustering_report = run_cluster_analysis(
+                Z_all,
+                k_anchor=(
+                    int(clustering_config["k_anchor"])
+                    if clustering_config.get("k_anchor") is not None
+                    else None
+                ),
+                k_max=int(clustering_config.get("k_max", 10)),
+                k_window=int(clustering_config.get("k_window", 1)),
+                gap_k_max=int(clustering_config.get("gap_k_max", 8)),
+                gap_n_references=int(
+                    clustering_config.get("gap_n_references", 5)
+                ),
+                vendi_max_samples=(
+                    None
+                    if clustering_config.get("vendi_max_samples") is None
+                    else int(clustering_config["vendi_max_samples"])
+                ),
+                random_state=int(
+                    clustering_config.get("random_state", spec.seed)
+                ),
+                hdbscan_min_cluster_size=int(
+                    clustering_config.get("hdbscan_min_cluster_size", 20)
+                ),
+                hdbscan_min_samples=(
+                    None
+                    if clustering_config.get("hdbscan_min_samples") is None
+                    else int(clustering_config["hdbscan_min_samples"])
+                ),
+                gmm_covariance_type=str(
+                    clustering_config.get("gmm_covariance_type", "full")
+                ),
+            )
+            clustering_report["selected_representation"] = selected_rung
+            clustering_report["embedding"] = {
+                "space": "selected_model_latent_z",
+                "scope": "train_val_test",
+                "n_samples": int(len(Z_all)),
+            }
+            clustering_dir = paths.root / "clustering"
+            clustering_dir.mkdir(parents=True, exist_ok=True)
+            clustering_report_path = clustering_dir / "cluster_analysis.json"
+            with clustering_report_path.open("w", encoding="utf-8") as handle:
+                json.dump(clustering_report, handle, indent=2)
+            clustering_artifacts = {
+                "report": posix_str(clustering_report_path),
+            }
+            k_selection = clustering_report.get("k_selection", {})
+            print(
+                "[Mapper clustering] "
+                f"status={clustering_report.get('status')}, "
+                f"k_hdbscan={k_selection.get('k_hdbscan')}, "
+                f"selected_k={k_selection.get('selected_k')}, "
+                f"global_vendi="
+                f"{clustering_report.get('vendi', {}).get('global_vendi')}",
+                flush=True,
+            )
+        except Exception as exc:  # clustering must not fail the workflow
+            clustering_report = {"status": "failed", "error": str(exc)}
+            print(f"[Mapper clustering] failed: {exc}", flush=True)
 
     metrics_payload: Dict[str, Any] = {
         "representation_ladder": ladder_results,
@@ -407,6 +483,8 @@ def run_mapper_workflow(
         metrics_payload["diversity"] = diversity_report
     if tendency_report is not None:
         metrics_payload["cluster_tendency"] = tendency_report
+    if clustering_report is not None:
+        metrics_payload["clustering"] = clustering_report
     save_metrics(metrics_payload, paths)
 
     split_sizes = {
@@ -414,12 +492,15 @@ def run_mapper_workflow(
         "val": int(X_val.shape[0]),
         "test": int(X_test.shape[0]) if X_test is not None else 0,
     }
+    status = _mapper_status_after_tendency(
+        tendency_decision,
+        diversity_complete=diversity_report is not None,
+    )
+    if clustering_report is not None:
+        status = _mapper_status_after_clustering(clustering_report)
     summary: Dict[str, Any] = {
         "workflow_type": "mapper",
-        "status": _mapper_status_after_tendency(
-            tendency_decision,
-            diversity_complete=diversity_report is not None,
-        ),
+        "status": status,
         "dataset": dataset.summary(),
         "input_columns": list(dataset.input_columns),
         "split_sizes": split_sizes,
@@ -446,10 +527,15 @@ def run_mapper_workflow(
         "diversity": diversity_report,
         "cluster_tendency": tendency_report,
         "clustering_decision": tendency_decision,
+        "clustering": clustering_report,
         "next_stage": (
-            tendency_decision["next_stage"]
-            if tendency_decision is not None
-            else "clustering_tendency"
+            None
+            if clustering_report is not None
+            else (
+                tendency_decision["next_stage"]
+                if tendency_decision is not None
+                else "clustering_tendency"
+            )
         ),
         "artifacts": {
             "root": posix_str(paths.root),
@@ -459,6 +545,7 @@ def run_mapper_workflow(
             "metrics": posix_str(paths.metrics_file),
             "diversity": diversity_artifacts,
             "tendency": tendency_artifacts,
+            "clustering": clustering_artifacts,
             "spec": posix_str(paths.spec_file),
             "summary": posix_str(paths.summary_file),
         },
@@ -517,6 +604,21 @@ def decide_clustering_action(
         raise ValueError("Cluster tendency summary is missing 'gate_passed'")
 
     gate_passed = bool(tendency_summary["gate_passed"])
+    gate_reason = str(
+        tendency_summary.get("gate_reason", "cluster_tendency_gate_failed")
+    )
+    if gate_reason == "hopkins_undefined":
+        return {
+            "gate_passed": False,
+            "proceed_to_clustering": False,
+            "action": "stop_hopkins_undefined",
+            "next_stage": None,
+            "stop_reason": gate_reason,
+            "message": (
+                "hopkins statistic undefined: check for zero distances "
+                "or identical coordinates"
+            ),
+        }
     return {
         "gate_passed": gate_passed,
         "proceed_to_clustering": gate_passed,
@@ -526,15 +628,7 @@ def decide_clustering_action(
             else "stop_no_cluster_tendency"
         ),
         "next_stage": "clustering" if gate_passed else None,
-        "stop_reason": (
-            None
-            if gate_passed
-            else str(
-                tendency_summary.get(
-                    "gate_reason", "cluster_tendency_gate_failed"
-                )
-            )
-        ),
+        "stop_reason": None if gate_passed else gate_reason,
     }
 
 
@@ -550,9 +644,23 @@ def _mapper_status_after_tendency(
             if diversity_complete
             else "representation_complete"
         )
+    if tendency_decision.get("action") == "stop_hopkins_undefined":
+        return "stopped_hopkins_undefined"
     if bool(tendency_decision["proceed_to_clustering"]):
         return "clustering_ready"
     return "stopped_no_cluster_tendency"
+
+
+def _mapper_status_after_clustering(
+    clustering_report: Mapping[str, Any],
+) -> str:
+    """Report the final Mapper stage after consensus clustering has run."""
+    stage = str(clustering_report.get("status", "complete"))
+    if stage == "failed":
+        return "clustering_failed"
+    if stage == "insufficient_data":
+        return "clustering_insufficient_data"
+    return "clustering_complete"
 
 
 def _resolve_ladder_model(

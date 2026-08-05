@@ -149,16 +149,19 @@ def _summarize_cluster_tendency(
     vat_matrix, vat_order, vat_parents = _vat_reordering(latent)
     ivat_matrix = _ivat_from_vat(vat_matrix, vat_parents)
 
-    gate_passed = True if hopkins is None else bool(hopkins >= hopkins_threshold)
+    if hopkins is None:
+        gate_passed = False
+        gate_reason = "hopkins_undefined"
+    else:
+        gate_passed = bool(hopkins >= hopkins_threshold)
+        gate_reason = "pass" if gate_passed else "hopkins_below_threshold"
     return {
         "n_samples": int(len(latent)),
         "latent_dim": int(latent.shape[1]) if latent.ndim == 2 else None,
         "hopkins": hopkins,
         "hopkins_threshold": float(hopkins_threshold),
         "gate_passed": gate_passed,
-        "gate_reason": (
-            "hopkins_below_threshold" if hopkins is not None and hopkins < hopkins_threshold else "pass"
-        ),
+        "gate_reason": gate_reason,
         "vat_order": vat_order.tolist(),
         "vat_parents": vat_parents.tolist(),
         "vat_matrix": vat_matrix,
