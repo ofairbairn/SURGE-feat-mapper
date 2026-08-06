@@ -1,4 +1,4 @@
-"""Preprocess Kaggle Chinese-MNIST and run a SURGE CNN workflow."""
+"""chinese mnist data cnn mnist"""
 
 from __future__ import annotations
 

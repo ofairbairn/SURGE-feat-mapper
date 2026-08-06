@@ -1,4 +1,6 @@
-"""Run a SURGE Mapper workflow on UCI Red Wine data (unsupervised)."""
+"""
+flattened chinese mnist data run through mapper
+"""
 
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ import surge  # noqa: F401 - ensure adapters are registered
 from surge.workflow.run import run_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 
-DEFAULT_CONFIG = Path("examples/configs/ae_red.yml")
+DEFAULT_CONFIG = Path("examples/configs/map_chinese.yml")
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
 	sys.path.insert(0, str(_REPO))
