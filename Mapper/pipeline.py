@@ -31,6 +31,7 @@ from .cluster import run_cluster_analysis
 from .data_preprocess import DataScaler
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
 from .tendency import _summarize_cluster_tendency, save_tendency_heatmap
+from .viz import plot_mapper_latent, plot_mapper_reconstruction
 
 _LADDER_RUNGS = ("pca", "ae", "vae") #ladder order
 _LADDER_MODEL_KEYS = {
@@ -476,6 +477,68 @@ def run_mapper_workflow(
             clustering_report = {"status": "failed", "error": str(exc)}
             print(f"[Mapper clustering] failed: {exc}", flush=True)
 
+    viz_artifacts: Dict[str, Any] = {}
+    visualization_config = dict(spec.mapper_visualization)
+    if bool(visualization_config.get("enabled", True)):
+        try:  # visualization must not fail the workflow
+            viz_dir = paths.root / "visualization"
+            viz_dir.mkdir(parents=True, exist_ok=True)
+            recon_payload = _compute_reconstruction_payload(
+                selected_adapter,
+                X_train,
+                X_val,
+                X_test,
+                raw.train_index,
+                raw.val_index,
+                raw.test_index,
+            )
+            latent_result = plot_mapper_latent(
+                Z_all,
+                sample_indices=all_indices,
+                output_dir=viz_dir,
+                model_name=f"mapper_{selected_rung}",
+                cluster_labels=None,
+                recon_error=(
+                    recon_payload["recon_error"] if recon_payload is not None else None
+                ),
+                hdbscan_min_cluster_size=int(
+                    clustering_config.get("hdbscan_min_cluster_size", 20)
+                ),
+                hdbscan_min_samples=(
+                    None
+                    if clustering_config.get("hdbscan_min_samples") is None
+                    else int(clustering_config["hdbscan_min_samples"])
+                ),
+                random_state=int(
+                    visualization_config.get("random_state", spec.seed)
+                ),
+                tendency_summary=tendency_report,
+                hopkins_threshold=float(
+                    tendency_config.get("hopkins_threshold", 0.55)
+                ),
+                save_tendency_artifacts=False,
+            )
+            viz_artifacts["latent"] = latent_result.get("saved_paths", [])
+            if recon_payload is not None:
+                recon_result = plot_mapper_reconstruction(
+                    recon_payload["y_true"],
+                    recon_payload["y_pred"],
+                    sample_indices=all_indices,
+                    output_dir=viz_dir,
+                    model_name=f"mapper_{selected_rung}",
+                )
+                viz_artifacts["reconstruction"] = recon_result.get(
+                    "saved_paths", []
+                )
+            n_artifacts = sum(len(v) for v in viz_artifacts.values())
+            print(
+                "[Mapper visualization] "
+                f"status=complete, n_artifacts={n_artifacts}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"[Mapper visualization] failed: {exc}", flush=True)
+
     metrics_payload: Dict[str, Any] = {
         "representation_ladder": ladder_results,
     }
@@ -546,12 +609,65 @@ def run_mapper_workflow(
             "diversity": diversity_artifacts,
             "tendency": tendency_artifacts,
             "clustering": clustering_artifacts,
+            "visualization": viz_artifacts,
             "spec": posix_str(paths.spec_file),
             "summary": posix_str(paths.summary_file),
         },
     }
     save_workflow_summary(summary, paths)
     return summary
+
+
+def _compute_reconstruction_payload(
+    adapter: Any,
+    X_train: np.ndarray,
+    X_val: np.ndarray,
+    X_test: Optional[np.ndarray],
+    train_index: np.ndarray,
+    val_index: np.ndarray,
+    test_index: Optional[np.ndarray],
+) -> Optional[Dict[str, np.ndarray]]:
+    """Per-sample reconstruction predictions/errors in original row order."""
+    if not callable(getattr(adapter, "reconstruct", None)):
+        return None
+    y_true_parts: list = []
+    y_pred_parts: list = []
+    index_parts: list = []
+    for X, idx in (
+        (X_train, train_index),
+        (X_val, val_index),
+        (X_test, test_index),
+    ):
+        if X is None or idx is None:
+            continue
+        try:
+            y_true = np.asarray(X, dtype=np.float64)
+            y_pred = np.asarray(adapter.reconstruct(X))
+        except Exception:
+            return None
+        if y_pred.shape != y_true.shape:
+            return None
+        y_true_parts.append(y_true)
+        y_pred_parts.append(y_pred)
+        index_parts.append(np.asarray(idx))
+    if not y_true_parts:
+        return None
+    y_true_all = np.vstack(y_true_parts)
+    y_pred_all = np.vstack(y_pred_parts)
+    all_indices = np.concatenate(index_parts)
+    try:
+        order = np.argsort(all_indices)
+    except TypeError:
+        order = np.argsort(all_indices.astype(str))
+    y_true_all = y_true_all[order]
+    y_pred_all = y_pred_all[order]
+    recon_error = np.sqrt(np.mean(np.square(y_pred_all - y_true_all), axis=1))
+    return {
+        "y_true": y_true_all,
+        "y_pred": y_pred_all,
+        "recon_error": recon_error,
+        "n_samples": int(len(all_indices)),
+    }
 
 
 def _combine_latent_splits(

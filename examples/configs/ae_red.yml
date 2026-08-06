@@ -41,6 +41,11 @@ workflow:
     hdbscan_min_samples: null
     gmm_covariance_type: full
     random_state: 42
+  # Emits latent (UMAP/t-SNE) and reconstruction plots into runs/.../visualization
+  # as soon as the mapper run ends, from the in-memory latent and model.
+  mapper_visualization:
+    enabled: true
+    random_state: 42
 
   models:
     - key: sklearn.pca
