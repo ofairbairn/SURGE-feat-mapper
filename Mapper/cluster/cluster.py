@@ -590,11 +590,10 @@ def run_cluster_analysis(
     """Cluster a latent embedding with an HDBSCAN-anchored consensus workflow.
 
     1. HDBSCAN always runs first (density-based, no k required).
-     2. The HDBSCAN cluster count anchors k for k-means and GMM; the internal
-       metrics (silhouette, CH, DB, partition-BIC) and the true GMM BIC vote
-         within a small window around the anchor (including k=1 as a valid
-         no-cluster option), and the gap statistic provides
-       a further k hint.
+    2. The HDBSCAN cluster count anchors k for k-means and GMM; both methods
+       are swept across nearby candidate k values, partition metrics are scored
+       for each method, true GMM BIC adds a GMM-specific vote, and the gap
+       statistic provides an extra method-agnostic k hint.
     3. k-means and GMM are fit at the chosen k and cross-checked with ARI/AMI
        against HDBSCAN.
     4. Within/between-cluster Vendi validate compactness and separation
@@ -618,14 +617,13 @@ def run_cluster_analysis(
         "latent_dim": int(latent.shape[1]),
     }
 
-    # 1. HDBSCAN always runs first (density-based, no k required).
     hdbscan_labels, _ = _cluster_latent_embeddings(
         latent,
         method="hdbscan",
         random_state=random_state,
         hdbscan_min_cluster_size=hdbscan_min_cluster_size,
         hdbscan_min_samples=hdbscan_min_samples,
-    ) #hdbscan fit on latent embeddings first by default
+    )
     hdbscan_quality = _compute_latent_quality_metrics(
         latent,
         metric_space,
@@ -635,7 +633,7 @@ def run_cluster_analysis(
         vendi_max_samples=vendi_max_samples,
         random_state=random_state,
     )
-    k_hdbscan = int(len(np.unique(hdbscan_labels[hdbscan_labels != -1]))) #k from hdbscan from non noise labels
+    k_hdbscan = int(len(np.unique(hdbscan_labels[hdbscan_labels != -1])))
     report["hdbscan"] = {
         "n_clusters": k_hdbscan,
         "n_noise": int(np.sum(hdbscan_labels == -1)),
@@ -643,7 +641,6 @@ def run_cluster_analysis(
         "quality": hdbscan_quality,
     }
 
-    # 2. Anchor k from HDBSCAN (or caller) and refine with the metrics.
     k_upper = max(1, min(int(k_max), n_samples - 1))
     anchor = (
         int(k_anchor)
@@ -661,34 +658,50 @@ def run_cluster_analysis(
     )
 
     metrics_by_k: Dict[str, Any] = {}
-    for candidate in candidates: #k candidate sweep for k-means
-        kmeans_labels, _ = _cluster_latent_embeddings(
+    for candidate in candidates:
+        kmeans_labels_candidate, _ = _cluster_latent_embeddings(
             latent,
             method="kmeans",
             n_clusters=candidate,
             random_state=random_state,
         )
-        metrics_by_k[str(candidate)] = _partition_scores(latent, kmeans_labels)
-        metrics_by_k[str(candidate)]["gmm_bic"] = _gmm_bic(
+        gmm_labels_candidate, _ = _cluster_latent_embeddings(
             latent,
-            candidate,
-            covariance_type=gmm_covariance_type,
+            method="gmm",
+            n_clusters=candidate,
             random_state=random_state,
+            gmm_covariance_type=gmm_covariance_type,
         )
+        metrics_by_k[str(candidate)] = {
+            "kmeans": _partition_scores(latent, kmeans_labels_candidate),
+            "gmm": {
+                **_partition_scores(latent, gmm_labels_candidate),
+                "gmm_bic": _gmm_bic(
+                    latent,
+                    candidate,
+                    covariance_type=gmm_covariance_type,
+                    random_state=random_state,
+                ),
+            },
+        }
 
-    direction = {
-        "silhouette": "max",
-        "calinski_harabasz": "max",
-        "davies_bouldin": "min",
-        "bic": "max",
-        "gmm_bic": "min",
+    vote_metrics = {
+        ("kmeans", "silhouette"): "max",
+        ("kmeans", "calinski_harabasz"): "max",
+        ("kmeans", "davies_bouldin"): "min",
+        ("kmeans", "bic"): "max",
+        ("gmm", "silhouette"): "max",
+        ("gmm", "calinski_harabasz"): "max",
+        ("gmm", "davies_bouldin"): "min",
+        ("gmm", "bic"): "max",
+        ("gmm", "gmm_bic"): "min",
     }
     votes: Dict[int, int] = {}
-    for metric, sense in direction.items():
+    for (method_name, metric), sense in vote_metrics.items():
         scored = {
-            candidate: metrics_by_k[str(candidate)][metric]
+            candidate: metrics_by_k[str(candidate)][method_name][metric]
             for candidate in candidates
-            if metrics_by_k[str(candidate)].get(metric) is not None
+            if metrics_by_k[str(candidate)][method_name].get(metric) is not None
         }
         if not scored:
             continue
@@ -713,13 +726,13 @@ def run_cluster_analysis(
     selected_k = anchor
     selection_reason = "hdbscan_anchor"
     if votes:
-        selected_k = max(votes, key=lambda k: (votes[k], k == anchor)) #k selection based on votes
+        selected_k = max(votes, key=lambda k: (votes[k], k == anchor))
         if selected_k != anchor:
             selection_reason = "metric_majority"
 
     report["k_selection"] = {
         "anchor": int(anchor),
-        "anchor_source": "provided" if k_anchor is not None else "hdbscan", #hdbscan result recorded
+        "anchor_source": "provided" if k_anchor is not None else "hdbscan",
         "anchor_reliable": bool(k_hdbscan >= 2),
         "k_hdbscan": k_hdbscan,
         "candidates": [int(candidate) for candidate in candidates],
@@ -730,14 +743,13 @@ def run_cluster_analysis(
         "selection_reason": selection_reason,
     }
 
-    # 3. k-means and GMM at the selected k.
     kmeans_labels, _ = _cluster_latent_embeddings(
         latent,
         method="kmeans",
         n_clusters=selected_k,
         random_state=random_state,
     )
-    gmm_labels, _ = _cluster_latent_embeddings( #gmm fit on k
+    gmm_labels, _ = _cluster_latent_embeddings(
         latent,
         method="gmm",
         n_clusters=selected_k,
@@ -769,14 +781,12 @@ def run_cluster_analysis(
         ),
     }
 
-    # 4. Cross-method agreement.
     report["agreement"] = {
         "hdbscan_vs_kmeans": _label_agreement(hdbscan_labels, kmeans_labels),
         "hdbscan_vs_gmm": _label_agreement(hdbscan_labels, gmm_labels),
         "kmeans_vs_gmm": _label_agreement(kmeans_labels, gmm_labels),
     }
 
-    # 5. Vendi validation: within/between clusters vs the global score.
     global_vendi = _compute_global_vendi(
         latent,
         max_samples=vendi_max_samples,

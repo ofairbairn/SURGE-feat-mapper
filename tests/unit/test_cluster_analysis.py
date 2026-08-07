@@ -79,6 +79,26 @@ def test_run_cluster_analysis_with_embedding_space() -> None:
     assert report["kmeans"]["quality"]["silhouette"] is not None
 
 
+def test_run_cluster_analysis_scores_gmm_across_candidate_k_values() -> None:
+    latent = _structured_latent()
+    report = run_cluster_analysis(
+        latent,
+        k_anchor=3,
+        k_window=1,
+        gap_k_max=4,
+        gap_n_references=1,
+        hdbscan_min_cluster_size=15,
+    )
+
+    metrics_by_k = report["k_selection"]["metrics_by_k"]
+    candidate_metrics = metrics_by_k["3"]
+
+    assert set(candidate_metrics) == {"kmeans", "gmm"}
+    assert "silhouette" in candidate_metrics["kmeans"]
+    assert "silhouette" in candidate_metrics["gmm"]
+    assert "gmm_bic" in candidate_metrics["gmm"]
+
+
 def test_run_cluster_analysis_insufficient_data() -> None:
     report = run_cluster_analysis(np.ones((1, 4), dtype=np.float64))
     assert report["status"] == "insufficient_data"
