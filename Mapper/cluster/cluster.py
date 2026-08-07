@@ -43,7 +43,7 @@ def _nearest_neighbor_preservation(
 def _compute_gap_statistic(
     X: np.ndarray,
     *,
-    k_min: int = 2,
+    k_min: int = 1,
     k_max: int = 10,
     n_references: int = 10,
     random_state: int = 42,
@@ -353,7 +353,7 @@ def _cluster_latent_embeddings(
         from sklearn.cluster import KMeans
 
         n_clusters_eff = int(n_clusters or min(8, max(2, int(np.sqrt(n_samples)))))
-        n_clusters_eff = max(2, min(n_clusters_eff, n_samples))
+        n_clusters_eff = max(1, min(n_clusters_eff, n_samples))
         clusterer = KMeans(n_clusters=n_clusters_eff, random_state=random_state, n_init="auto")
         return clusterer.fit_predict(latent), None
 
@@ -379,7 +379,7 @@ def _cluster_latent_embeddings(
         from sklearn.mixture import GaussianMixture
 
         n_components_eff = int(n_clusters or min(8, max(2, int(np.sqrt(n_samples)))))
-        n_components_eff = max(2, min(n_components_eff, n_samples))
+        n_components_eff = max(1, min(n_components_eff, n_samples))
         clusterer = GaussianMixture(
             n_components=n_components_eff,
             covariance_type=gmm_covariance_type,
@@ -392,7 +392,7 @@ def _cluster_latent_embeddings(
         from sklearn.cluster import AgglomerativeClustering
 
         n_clusters_eff = int(n_clusters or min(8, max(2, int(np.sqrt(n_samples)))))
-        n_clusters_eff = max(2, min(n_clusters_eff, n_samples))
+        n_clusters_eff = max(1, min(n_clusters_eff, n_samples))
         clusterer = AgglomerativeClustering(n_clusters=n_clusters_eff, linkage=agglomerative_linkage)
         labels = clusterer.fit_predict(latent)
         linkage_matrix = linkage(latent, method=agglomerative_linkage)
@@ -408,7 +408,7 @@ def _empty_gap_statistic(k_max: int = 8) -> Dict[str, Any]:
     """Empty gap-statistic payload used when the gap statistic is not computed."""
     return {
         "optimal_k": None,
-        "k_min": 2,
+        "k_min": 1,
         "k_max": int(k_max),
         "gap_values": [],
         "gap_sds": [],
@@ -590,9 +590,10 @@ def run_cluster_analysis(
     """Cluster a latent embedding with an HDBSCAN-anchored consensus workflow.
 
     1. HDBSCAN always runs first (density-based, no k required).
-    2. The HDBSCAN cluster count anchors k for k-means and GMM; the internal
+     2. The HDBSCAN cluster count anchors k for k-means and GMM; the internal
        metrics (silhouette, CH, DB, partition-BIC) and the true GMM BIC vote
-       within a small window around the anchor, and the gap statistic provides
+         within a small window around the anchor (including k=1 as a valid
+         no-cluster option), and the gap statistic provides
        a further k hint.
     3. k-means and GMM are fit at the chosen k and cross-checked with ARI/AMI
        against HDBSCAN.
@@ -643,17 +644,17 @@ def run_cluster_analysis(
     }
 
     # 2. Anchor k from HDBSCAN (or caller) and refine with the metrics.
-    k_upper = max(2, min(int(k_max), n_samples - 1))
+    k_upper = max(1, min(int(k_max), n_samples - 1))
     anchor = (
         int(k_anchor)
         if k_anchor is not None
-        else (k_hdbscan if k_hdbscan >= 2 else 2)
+        else (k_hdbscan if k_hdbscan >= 1 else 1)
     )
-    anchor = max(2, min(anchor, k_upper))
+    anchor = max(1, min(anchor, k_upper))
     window = max(0, int(k_window))
     candidates = sorted(
         {
-            max(2, anchor - window),
+            max(1, anchor - window),
             anchor,
             min(k_upper, anchor + window),
         }
@@ -700,7 +701,7 @@ def run_cluster_analysis(
 
     gap_report = _compute_gap_statistic(
         latent,
-        k_min=2,
+        k_min=1,
         k_max=k_upper,
         n_references=gap_n_references,
         random_state=random_state,

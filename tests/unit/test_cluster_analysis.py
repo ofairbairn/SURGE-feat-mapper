@@ -94,4 +94,23 @@ def test_run_cluster_analysis_degenerate_constant_latent() -> None:
     )
 
     assert report["status"] == "complete"
-    assert report["k_selection"]["selected_k"] >= 2
+    assert report["k_selection"]["selected_k"] >= 1
+
+
+def test_run_cluster_analysis_allows_explicit_k_equals_one() -> None:
+    latent = _structured_latent()
+    report = run_cluster_analysis(
+        latent,
+        k_anchor=1,
+        k_max=3,
+        k_window=0,
+        gap_k_max=3,
+        gap_n_references=1,
+        hdbscan_min_cluster_size=15,
+    )
+
+    assert report["status"] == "complete"
+    assert report["k_selection"]["anchor"] == 1
+    assert report["k_selection"]["selected_k"] == 1
+    assert report["kmeans"]["n_clusters"] == 1
+    assert report["gmm"]["n_clusters"] == 1
