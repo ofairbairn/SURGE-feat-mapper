@@ -1316,10 +1316,163 @@ def plot_mapper_reconstruction(
     }
 
 
+def plot_mapper_pca(
+    Z: np.ndarray,
+    *,
+    output_dir: Path,
+    model_name: str = "mapper_pca",
+    split: str = "train_val_test",
+    explained_variance_ratio: Optional[np.ndarray] = None,
+) -> Dict[str, Any]:
+    """Render a PCA diagnostic figure (scores + variance summary)."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        LOG.warning("matplotlib is required for Mapper PCA visualization.")
+        return {
+            "status": "skipped",
+            "reason": "matplotlib_unavailable",
+            "saved_paths": [],
+        }
+
+    Z = np.asarray(Z, dtype=np.float64)
+    if Z.ndim == 1:
+        Z = Z[:, None]
+    if Z.ndim != 2 or Z.shape[0] == 0:
+        return {
+            "status": "skipped",
+            "reason": "empty_or_invalid_latent",
+            "saved_paths": [],
+        }
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_model_name = model_name.replace(" ", "_")
+    out_png = output_dir / f"pca_{safe_model_name}_{split}.png"
+
+    evr = None
+    if explained_variance_ratio is not None:
+        evr_arr = np.asarray(explained_variance_ratio, dtype=np.float64).reshape(-1)
+        finite = np.isfinite(evr_arr)
+        if np.any(finite):
+            evr = evr_arr[finite]
+
+    if evr is not None and evr.size > 0:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        ax_scatter = axes[0]
+        ax_var = axes[1]
+    else:
+        fig, ax_scatter = plt.subplots(figsize=(7, 6))
+        ax_var = None
+
+    if Z.shape[1] >= 2:
+        x_vals = Z[:, 0]
+        y_vals = Z[:, 1]
+        ax_scatter.set_xlabel("PC1")
+        ax_scatter.set_ylabel("PC2")
+        ax_scatter.set_title(f"{_model_short_name(model_name)} {split} PCA scores")
+    else:
+        x_vals = np.arange(Z.shape[0], dtype=np.int64)
+        y_vals = Z[:, 0]
+        ax_scatter.set_xlabel("Sample index")
+        ax_scatter.set_ylabel("PC1")
+        ax_scatter.set_title(
+            f"{_model_short_name(model_name)} {split} PCA scores (single component)"
+        )
+    ax_scatter.scatter(x_vals, y_vals, s=18, alpha=0.75, edgecolors="none")
+    if Z.shape[1] >= 2:
+        x_min = float(np.nanmin(x_vals))
+        x_max = float(np.nanmax(x_vals))
+        y_min = float(np.nanmin(y_vals))
+        y_max = float(np.nanmax(y_vals))
+        x_span = max(1e-12, x_max - x_min)
+        y_span = max(1e-12, y_max - y_min)
+
+        # In PC-score space, PC1 and PC2 directions coincide with x/y axes.
+        ax_scatter.plot(
+            [x_min - 0.05 * x_span, x_max + 0.05 * x_span],
+            [0.0, 0.0],
+            linestyle="--",
+            color="red",
+            linewidth=1.6,
+            alpha=0.9,
+        )
+        ax_scatter.plot(
+            [0.0, 0.0],
+            [y_min - 0.05 * y_span, y_max + 0.05 * y_span],
+            linestyle="--",
+            color="red",
+            linewidth=1.6,
+            alpha=0.9,
+        )
+        ax_scatter.text(
+            x_max + 0.04 * x_span,
+            0.0,
+            "PC1",
+            color="red",
+            fontsize=10,
+            fontweight="bold",
+            va="bottom",
+            ha="right",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=1.0),
+        )
+        ax_scatter.text(
+            0.0,
+            y_max + 0.04 * y_span,
+            "PC2",
+            color="red",
+            fontsize=10,
+            fontweight="bold",
+            va="top",
+            ha="left",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=1.0),
+        )
+    ax_scatter.grid(alpha=0.25)
+
+    if ax_var is not None and evr is not None:
+        n_plot = min(20, evr.size)
+        pcs = np.arange(1, n_plot + 1, dtype=np.int64)
+        cumulative = np.cumsum(evr)
+        ax_var.bar(pcs, evr[:n_plot], alpha=0.75, label="Explained variance ratio")
+        ax_var.plot(
+            pcs,
+            cumulative[:n_plot],
+            color="black",
+            marker="o",
+            linewidth=1.5,
+            markersize=3,
+            label="Cumulative explained variance",
+        )
+        ax_var.set_ylim(0.0, 1.05)
+        ax_var.set_xlabel("Principal component")
+        ax_var.set_ylabel("Variance ratio")
+        ax_var.set_title("PCA explained variance")
+        ax_var.grid(alpha=0.25)
+        ax_var.legend(loc="lower right")
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    return {
+        "status": "complete",
+        "model_name": model_name,
+        "split": split,
+        "n_samples": int(Z.shape[0]),
+        "n_components": int(Z.shape[1]),
+        "saved_paths": [str(out_png)],
+    }
+
+
 __all__ = [
     "DEFAULT_MODEL_DISPLAY",
     "_model_short_name",
     "plot_mapper_latent",
+    "plot_mapper_pca",
     "plot_mapper_reconstruction",
     "viz_unsupervised_latent",
     "viz_unsupervised_reconstruction",

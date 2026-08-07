@@ -9,9 +9,9 @@ workflow:
   output_dir: runs
   # Mapper ladder gate keys (val RMSE).
   unsupervised_ladder_thresholds:
-    pca_max_recon_rmse: 0.15
-    ae_max_recon_rmse: 0.15
-    vae_max_recon_rmse: 0.15
+    pca_max_recon_rmse: 0.18
+    ae_max_recon_rmse: 0.18
+    vae_max_recon_rmse: 0.18
   mapper_diversity:
     enabled: true
     kernel: rbf

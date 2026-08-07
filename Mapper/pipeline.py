@@ -31,7 +31,7 @@ from .cluster import run_cluster_analysis
 from .data_preprocess import DataScaler
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
 from .tendency import _summarize_cluster_tendency, save_tendency_heatmap
-from .viz import plot_mapper_latent, plot_mapper_reconstruction
+from .viz import plot_mapper_latent, plot_mapper_pca, plot_mapper_reconstruction
 
 _LADDER_RUNGS = ("pca", "ae", "vae") #ladder order
 _LADDER_MODEL_KEYS = {
@@ -519,6 +519,17 @@ def run_mapper_workflow(
                 save_tendency_artifacts=False,
             )
             viz_artifacts["latent"] = latent_result.get("saved_paths", [])
+            if selected_rung == "pca":
+                pca_result = plot_mapper_pca(
+                    Z_all,
+                    output_dir=viz_dir,
+                    model_name=f"mapper_{selected_rung}",
+                    split="train_val_test",
+                    explained_variance_ratio=_extract_pca_explained_variance_ratio(
+                        selected_adapter
+                    ),
+                )
+                viz_artifacts["pca"] = pca_result.get("saved_paths", [])
             if recon_payload is not None:
                 recon_result = plot_mapper_reconstruction(
                     recon_payload["y_true"],
@@ -855,6 +866,31 @@ def _serializable_metrics(
         str(key): None if value is None else float(value)
         for key, value in metrics.items()
     }
+
+
+def _extract_pca_explained_variance_ratio(
+    adapter: Any,
+) -> Optional[np.ndarray]:
+    """Try to extract explained variance ratio from a fitted PCA adapter."""
+    if adapter is None:
+        return None
+
+    model = getattr(adapter, "_model", None)
+    if model is None:
+        return None
+
+    backend_model = getattr(model, "model", None)
+    if backend_model is None:
+        return None
+
+    evr = getattr(backend_model, "explained_variance_ratio_", None)
+    if evr is None:
+        return None
+
+    evr_arr = np.asarray(evr, dtype=np.float64).reshape(-1)
+    if evr_arr.size == 0:
+        return None
+    return evr_arr
 
 
 def _default_mapper_run_tag(file_path: Optional[Path]) -> str:
