@@ -187,7 +187,7 @@ def save_tendency_heatmap(
     fig, axis = plt.subplots(figsize=(6.0, 5.0))
     image = axis.imshow(
         matrix,
-        cmap="viridis",
+        cmap="gray",
         aspect="auto",
         interpolation="nearest",
     )

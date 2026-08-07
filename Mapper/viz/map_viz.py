@@ -126,7 +126,7 @@ def _save_tendency_heatmap(matrix: np.ndarray, *, out_png: Path, title: str) -> 
         return None
 
     fig, ax = plt.subplots(figsize=(6, 5))
-    im = ax.imshow(matrix, cmap="viridis", aspect="auto", interpolation="nearest")
+    im = ax.imshow(matrix, cmap="gray", aspect="auto", interpolation="nearest")
     ax.set_title(title)
     ax.set_xlabel("Reordered sample index")
     ax.set_ylabel("Reordered sample index")
