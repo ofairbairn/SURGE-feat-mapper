@@ -845,4 +845,13 @@ def run_cluster_analysis(
         "ratios": ratios,
     }
 
+    # Persist method label vectors so downstream stability can evaluate
+    # reproducibility on the primary clustering output (HDBSCAN) as well as
+    # k-means and GMM confirmation partitions.
+    report["labels"] = {
+        "hdbscan": np.asarray(hdbscan_labels, dtype=int).tolist(),
+        "kmeans": np.asarray(kmeans_labels, dtype=int).tolist(),
+        "gmm": np.asarray(gmm_labels, dtype=int).tolist(),
+    }
+
     return report

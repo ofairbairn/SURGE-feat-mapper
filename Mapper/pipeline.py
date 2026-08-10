@@ -30,6 +30,7 @@ from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
 from .cluster import run_cluster_analysis
 from .data_preprocess import DataScaler
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
+from .stability.stability import run_cluster_stability
 from .tendency import _summarize_cluster_tendency, save_tendency_heatmap
 from .viz import plot_mapper_latent, plot_mapper_pca, plot_mapper_reconstruction
 
@@ -477,6 +478,96 @@ def run_mapper_workflow(
             clustering_report = {"status": "failed", "error": str(exc)}
             print(f"[Mapper clustering] failed: {exc}", flush=True)
 
+    stability_report: Optional[Dict[str, Any]] = None
+    stability_artifacts: Dict[str, str] = {}
+    stability_config = dict(getattr(spec, "mapper_stability", {}) or {})
+    if clustering_report is not None and bool(stability_config.get("enabled", True)):
+        if str(clustering_report.get("status", "")).lower() == "complete":
+            try:
+                selected_k = int(clustering_report.get("k_selection", {}).get("selected_k", 1))
+                stability_report, stability_arrays = run_cluster_stability(
+                    Z_all,
+                    selected_k=selected_k,
+                    baseline_labels=(
+                        clustering_report.get("labels")
+                        if isinstance(clustering_report.get("labels"), dict)
+                        else None
+                    ),
+                    n_bootstraps=int(stability_config.get("n_bootstraps", 25)),
+                    bootstrap_fraction=float(stability_config.get("bootstrap_fraction", 0.8)),
+                    random_state=int(stability_config.get("random_state", spec.seed)),
+                    max_samples=(
+                        None
+                        if stability_config.get("max_samples") is None
+                        else int(stability_config["max_samples"])
+                    ),
+                    gmm_covariance_type=str(
+                        clustering_config.get("gmm_covariance_type", "full")
+                    ),
+                    hdbscan_min_cluster_size=int(
+                        clustering_config.get("hdbscan_min_cluster_size", 20)
+                    ),
+                    hdbscan_min_samples=(
+                        None
+                        if clustering_config.get("hdbscan_min_samples") is None
+                        else int(clustering_config["hdbscan_min_samples"])
+                    ),
+                )
+                stability_report["selected_representation"] = selected_rung
+                stability_report["embedding"] = {
+                    "space": "selected_model_latent_z",
+                    "scope": "train_val_test",
+                    "n_samples_total": int(len(Z_all)),
+                    "n_samples_used": int(len(stability_arrays["sample_positions"])),
+                    "subsampled": bool(len(stability_arrays["sample_positions"]) < len(Z_all)),
+                    "max_samples": (
+                        None
+                        if stability_config.get("max_samples") is None
+                        else int(stability_config["max_samples"])
+                    ),
+                    "random_state": int(stability_config.get("random_state", spec.seed)),
+                }
+
+                stability_dir = paths.root / "stability"
+                stability_dir.mkdir(parents=True, exist_ok=True)
+                stability_report_path = stability_dir / "cluster_stability.json"
+                with stability_report_path.open("w", encoding="utf-8") as handle:
+                    json.dump(stability_report, handle, indent=2)
+                stability_arrays_path = stability_dir / "cluster_stability_arrays.npz"
+                np.savez_compressed(
+                    stability_arrays_path,
+                    sample_index=all_indices[stability_arrays["sample_positions"]],
+                    baseline_kmeans_labels=stability_arrays["baseline_kmeans_labels"],
+                    baseline_gmm_labels=stability_arrays["baseline_gmm_labels"],
+                    baseline_hdbscan_labels=stability_arrays.get(
+                        "baseline_hdbscan_labels",
+                        np.full(
+                            len(stability_arrays["baseline_kmeans_labels"]),
+                            -1,
+                            dtype=np.int64,
+                        ),
+                    ),
+                    consensus_labels=stability_arrays["consensus_labels"],
+                    coassociation_matrix=stability_arrays["coassociation_matrix"],
+                )
+                stability_artifacts = {
+                    "report": posix_str(stability_report_path),
+                    "arrays": posix_str(stability_arrays_path),
+                }
+                consensus_agreement = stability_report.get("consensus_clustering", {}).get("agreement", {})
+                print(
+                    "[Mapper stability] "
+                    f"status={stability_report.get('status')}, "
+                    f"selected_k={stability_report.get('selected_k')}, "
+                    f"hdbscan_jaccard={stability_report.get('bootstrap_jaccard', {}).get('hdbscan', {}).get('mean')}, "
+                    f"kmeans_jaccard={stability_report.get('bootstrap_jaccard', {}).get('kmeans', {}).get('mean')}, "
+                    f"consensus_ari={consensus_agreement.get('hdbscan', {}).get('ari')}",
+                    flush=True,
+                )
+            except Exception as exc:  # stability must not fail the workflow
+                stability_report = {"status": "failed", "error": str(exc)}
+                print(f"[Mapper stability] failed: {exc}", flush=True)
+
     viz_artifacts: Dict[str, Any] = {}
     visualization_config = dict(spec.mapper_visualization)
     if bool(visualization_config.get("enabled", True)):
@@ -559,6 +650,8 @@ def run_mapper_workflow(
         metrics_payload["cluster_tendency"] = tendency_report
     if clustering_report is not None:
         metrics_payload["clustering"] = clustering_report
+    if stability_report is not None:
+        metrics_payload["stability"] = stability_report
     save_metrics(metrics_payload, paths)
 
     split_sizes = {
@@ -602,6 +695,7 @@ def run_mapper_workflow(
         "cluster_tendency": tendency_report,
         "clustering_decision": tendency_decision,
         "clustering": clustering_report,
+        "stability": stability_report,
         "next_stage": (
             None
             if clustering_report is not None
@@ -620,6 +714,7 @@ def run_mapper_workflow(
             "diversity": diversity_artifacts,
             "tendency": tendency_artifacts,
             "clustering": clustering_artifacts,
+            "stability": stability_artifacts,
             "visualization": viz_artifacts,
             "spec": posix_str(paths.spec_file),
             "summary": posix_str(paths.summary_file),
