@@ -271,7 +271,7 @@ def _build_reasons(
     signal_percentiles: Dict[str, Optional[float]],
     quantile: float,
 ) -> List[str]:
-    """Plain-language reasons for one triage entry, never an anomaly verdict."""
+    """Plain-language reasons for one triage list entry, never an anomaly verdict."""
     reasons = [
         _SIGNAL_REASON_TEXT[name]
         for name, rank in signal_percentiles.items()

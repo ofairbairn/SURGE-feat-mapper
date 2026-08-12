@@ -634,10 +634,12 @@ def run_cluster_analysis(
         random_state=random_state,
     )
     k_hdbscan = int(len(np.unique(hdbscan_labels[hdbscan_labels != -1])))
+    hdbscan_degenerate_all_noise = bool(k_hdbscan == 0)
     report["hdbscan"] = {
         "n_clusters": k_hdbscan,
         "n_noise": int(np.sum(hdbscan_labels == -1)),
         "noise_fraction": float(np.mean(hdbscan_labels == -1)),
+        "status": "degenerate_all_noise" if hdbscan_degenerate_all_noise else "complete",
         "quality": hdbscan_quality,
     }
 
@@ -732,7 +734,11 @@ def run_cluster_analysis(
 
     report["k_selection"] = {
         "anchor": int(anchor),
-        "anchor_source": "provided" if k_anchor is not None else "hdbscan",
+        "anchor_source": (
+            "provided"
+            if k_anchor is not None
+            else "hdbscan_degenerate_all_noise" if hdbscan_degenerate_all_noise else "hdbscan"
+        ),
         "anchor_reliable": bool(k_hdbscan >= 2),
         "k_hdbscan": k_hdbscan,
         "candidates": [int(candidate) for candidate in candidates],

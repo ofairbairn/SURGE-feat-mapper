@@ -87,6 +87,12 @@ class SurrogateWorkflowSpec:
     # HDBSCAN-anchored consensus clustering (HDBSCAN -> k-means + GMM with a
     # metric vote around the HDBSCAN k, then Vendi per-cluster validation).
     mapper_clustering: Dict[str, Any] = field(default_factory=dict)
+    # Bootstrap Jaccard + consensus clustering stability checks on the
+    # selected Mapper clustering solution.
+    mapper_stability: Dict[str, Any] = field(default_factory=dict)
+    # Reconstruction error, HDBSCAN GLOSH, GMM Mahalanobis, Isolation Forest,
+    # LOF, and marginal Vendi contribution anomaly triage for Mapper.
+    mapper_anomaly: Dict[str, Any] = field(default_factory=dict)
     # Latent + reconstruction plot emission at the end of a Mapper run.
     mapper_visualization: Dict[str, Any] = field(default_factory=dict)
     # HDF5 leaf name under run*/sparc_* (default: sdata_pertfields_grid_complex_v2.h5).

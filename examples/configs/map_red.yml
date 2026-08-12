@@ -9,9 +9,9 @@ workflow:
   output_dir: runs
   # Mapper ladder gate keys (val RMSE).
   unsupervised_ladder_thresholds:
-    pca_max_recon_rmse: 0.20
-    ae_max_recon_rmse: 0.20
-    vae_max_recon_rmse: 0.20
+    pca_max_recon_rmse: 0.18
+    ae_max_recon_rmse: 0.18
+    vae_max_recon_rmse: 0.18
   mapper_diversity:
     enabled: true
     kernel: rbf
@@ -37,8 +37,8 @@ workflow:
     gap_k_max: 8
     gap_n_references: 5
     vendi_max_samples: 200
-    hdbscan_min_cluster_size: 20
-    hdbscan_min_samples: null
+    hdbscan_min_cluster_size: 10
+    hdbscan_min_samples: 3
     gmm_covariance_type: full
     random_state: 42
   # Emits latent (UMAP/t-SNE) and reconstruction plots into runs/.../visualization

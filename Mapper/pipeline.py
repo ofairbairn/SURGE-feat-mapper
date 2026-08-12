@@ -490,7 +490,7 @@ def run_mapper_workflow(
 
     stability_report: Optional[Dict[str, Any]] = None
     stability_artifacts: Dict[str, str] = {}
-    stability_config = dict(getattr(spec, "mapper_stability", {}) or {})
+    stability_config = dict(spec.mapper_stability)
     if clustering_report is not None and bool(stability_config.get("enabled", True)):
         if str(clustering_report.get("status", "")).lower() == "complete":
             try:
@@ -580,7 +580,7 @@ def run_mapper_workflow(
 
     anomaly_report: Optional[Dict[str, Any]] = None
     anomaly_artifacts: Dict[str, str] = {}
-    anomaly_config = dict(getattr(spec, "mapper_anomaly", {}) or {})
+    anomaly_config = dict(spec.mapper_anomaly)
     if bool(anomaly_config.get("enabled", True)):
         try:
             selected_k_hint = (
@@ -637,7 +637,7 @@ def run_mapper_workflow(
 
                 anomaly_dir = paths.root / "anomaly"
                 anomaly_dir.mkdir(parents=True, exist_ok=True)
-                anomaly_report_path = anomaly_dir / "anomaly_triage.json"
+                anomaly_report_path = anomaly_dir / "anomaly_list.json"
                 with anomaly_report_path.open("w", encoding="utf-8") as handle:
                     json.dump(anomaly_report, handle, indent=2)
                 anomaly_arrays_path = anomaly_dir / "anomaly_scores.npz"

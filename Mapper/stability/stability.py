@@ -171,6 +171,12 @@ def _predict_hdbscan_labels(model: Any, latent: np.ndarray) -> np.ndarray:
 	return np.asarray(labels, dtype=np.int64)
 
 
+def _hdbscan_is_all_noise(labels: np.ndarray) -> bool:
+	"""True when an HDBSCAN fit assigned every point to noise (no defined clusters)."""
+	labels = np.asarray(labels)
+	return bool(labels.size > 0 and np.all(labels == -1))
+
+
 def _bootstrap_positions(
 	n_samples: int,
 	*,
@@ -307,6 +313,7 @@ def run_cluster_stability(
 	)
 
 	baseline_hdbscan: Optional[np.ndarray] = None
+	hdbscan_baseline_status = "unavailable"
 	if baseline_labels is not None and "hdbscan" in baseline_labels:
 		provided = np.asarray(baseline_labels["hdbscan"], dtype=np.int64)
 		if provided.shape[0] == n_samples:
@@ -323,6 +330,11 @@ def run_cluster_stability(
 			baseline_hdbscan = np.asarray(hdbscan_model.labels_, dtype=np.int64)
 		except Exception:
 			baseline_hdbscan = None
+	if baseline_hdbscan is not None and _hdbscan_is_all_noise(baseline_hdbscan):
+		hdbscan_baseline_status = "degenerate_all_noise"
+		baseline_hdbscan = None
+	elif baseline_hdbscan is not None:
+		hdbscan_baseline_status = "complete"
 
 	bootstrap_jaccard_scores: Dict[str, list[float]] = {"kmeans": [], "gmm": [], "hdbscan": []}
 	bootstrap_cluster_support: Dict[str, Dict[str, list[float]]] = {
@@ -333,6 +345,7 @@ def run_cluster_stability(
 	consensus_inputs: list[np.ndarray] = []
 	bootstrap_methods_used = {"kmeans": 0, "gmm": 0, "hdbscan": 0}
 	reduced_bootstraps = 0
+	hdbscan_degenerate_bootstraps = 0
 
 	rng = np.random.default_rng(random_state)
 	for _ in range(bootstrap_count):
@@ -379,7 +392,12 @@ def run_cluster_stability(
 						min_cluster_size=hdbscan_min_cluster_size,
 						min_samples=hdbscan_min_samples,
 					)
-					boot_hdbscan_full = _predict_hdbscan_labels(boot_hdbscan_model, latent_used)
+					if _hdbscan_is_all_noise(boot_hdbscan_model.labels_):
+						# no defined clusters to project onto; skip approximate_predict entirely
+						hdbscan_degenerate_bootstraps += 1
+						boot_hdbscan_full = None
+					else:
+						boot_hdbscan_full = _predict_hdbscan_labels(boot_hdbscan_model, latent_used)
 				except Exception:
 					boot_hdbscan_model = None
 					boot_hdbscan_full = None
@@ -491,28 +509,6 @@ def run_cluster_stability(
 		else None
 	)
 	bootstrap_index_level, bootstrap_index_message = _stability_jaccard_message(bootstrap_index)
-	print(
-		"[Mapper stability] "
-		f"bootstrap_jaccard_index={bootstrap_index if bootstrap_index is not None else 'undefined'} "
-		f"-> {bootstrap_index_message}",
-		flush=True,
-	)
-
-	for method_name in ("kmeans", "gmm", "hdbscan"):
-		method_mean = (
-			kmeans_bootstrap_stats["mean"]
-			if method_name == "kmeans"
-			else gmm_bootstrap_stats["mean"]
-			if method_name == "gmm"
-			else hdbscan_bootstrap_stats["mean"]
-		)
-		_, method_message = _stability_jaccard_message(method_mean)
-		print(
-			"[Mapper stability] "
-			f"{method_name}_bootstrap_jaccard={method_mean if method_mean is not None else 'undefined'} "
-			f"-> {method_message}",
-			flush=True,
-		)
 
 	consensus_agreement = {}
 	try:
@@ -552,13 +548,14 @@ def run_cluster_stability(
 		"n_bootstraps": int(bootstrap_count),
 		"bootstrap_methods_used": bootstrap_methods_used,
 		"reduced_bootstraps": int(reduced_bootstraps),
+		"hdbscan_degenerate_bootstraps": int(hdbscan_degenerate_bootstraps),
 		"reference_models": {
 			"kmeans": {"cluster_sizes": _cluster_sizes(baseline_kmeans)},
 			"gmm": {"cluster_sizes": _cluster_sizes(baseline_gmm)},
 			"hdbscan": (
-				{"cluster_sizes": _cluster_sizes(baseline_hdbscan)}
+				{"cluster_sizes": _cluster_sizes(baseline_hdbscan), "status": hdbscan_baseline_status}
 				if baseline_hdbscan is not None
-				else None
+				else {"status": hdbscan_baseline_status}
 			),
 			"reference_agreement": reference_agreement,
 		},
