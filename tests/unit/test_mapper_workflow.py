@@ -311,7 +311,10 @@ def test_mapper_ladder_runs_real_pca_ae_and_vae_backends(tmp_path: Path) -> None
     ladder = summary["representation_ladder"]
 
     assert [rung["rung"] for rung in ladder["rungs_run"]] == ["pca", "ae", "vae"]
-    assert ladder["selected_rung"] == "vae"
+    # Ladder is exhausted (none pass the impossible 0.0 threshold); the rung
+    # with the smallest validation RMSE is selected, not just the last rung run.
+    best_rung = min(ladder["rungs_run"], key=lambda rung: rung["quality_gate"]["value"])
+    assert ladder["selected_rung"] == best_rung["rung"]
     assert ladder["quality_sufficient"] is False
     assert ladder["exhausted"] is True
     for rung in ladder["rungs_run"]:

@@ -149,6 +149,7 @@ def run_mapper_workflow(
             copy_invoked_config_source(paths, Path(spec_source))
 
     ladder_results = []
+    rung_adapters: Dict[str, Any] = {}
     selected_adapter = None
     selected_rung = None
     selected_quality_sufficient = False
@@ -174,6 +175,7 @@ def run_mapper_workflow(
             )
         adapter.mark_fitted()
         fit_seconds = float(time.perf_counter() - fit_start)
+        rung_adapters[rung] = adapter
 
         split_metrics = {
             "train": _serializable_metrics(adapter.reconstruction_metrics(X_train)),
@@ -228,6 +230,24 @@ def run_mapper_workflow(
         if selected_quality_sufficient: #stop climbing on first check that passes threshold
             break
 
+    if not selected_quality_sufficient:
+        # ladder exhausted without passing the gate: use the smallest validation
+        # error across all rungs run instead of defaulting to the last (VAE) rung
+        best_rung_result = min(ladder_results, key=lambda result: result["quality_gate"]["value"])
+        selected_rung = best_rung_result["rung"]
+        selected_adapter = rung_adapters[selected_rung]
+        print(
+            "[Mapper ladder] Exhausted without passing the gate; selecting rung with "
+            f"smallest validation {best_rung_result['quality_gate']['metric']}: "
+            f"{selected_rung.upper()}",
+            flush=True,
+        )
+
+    ladder_exhausted = (
+        bool(ladder_results)
+        and ladder_results[-1]["rung"] == _LADDER_RUNGS[-1]
+        and not selected_quality_sufficient
+    )
     if selected_adapter is None or selected_rung is None:  # pragma: no cover
         raise RuntimeError("Mapper representation ladder did not run any models.")
 
@@ -775,10 +795,7 @@ def run_mapper_workflow(
             "rungs_run": ladder_results,
             "selected_rung": selected_rung,
             "quality_sufficient": selected_quality_sufficient,
-            "exhausted": (
-                selected_rung == _LADDER_RUNGS[-1]
-                and not selected_quality_sufficient
-            ),
+            "exhausted": ladder_exhausted,
         },
         "diversity": diversity_report,
         "cluster_tendency": tendency_report,

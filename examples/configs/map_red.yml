@@ -58,7 +58,7 @@ workflow:
       name: Autoencoder
       params:
         latent_dim: 8
-        hidden_dims: [128, 64]
+        hidden_dims: [128, 64, 32]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001
@@ -68,7 +68,7 @@ workflow:
       name: VAE
       params:
         latent_dim: 8
-        hidden_dims: [128, 64]
+        hidden_dims: [128, 64, 32]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001

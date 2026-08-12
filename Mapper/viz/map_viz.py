@@ -6,9 +6,7 @@ Owns the unsupervised-latent and reconstruction plot families (migrated from
 in-memory arrays (``plot_mapper_latent``, ``plot_mapper_reconstruction``) so
 the Mapper pipeline can emit plots straight into the run directory without
 reloading the dataset, scalers, or models.
-
 Outputs graphs and plots from the mapper workflow into the runs folder.
-[EDIT HERE] eventually I want to have items go into a report html or something
 """
 
 from __future__ import annotations
@@ -47,11 +45,9 @@ DEFAULT_MODEL_DISPLAY = {
     "xgc_rf_aparallel": "Random Forest",
 }
 
-
 def _model_short_name(name: str) -> str:
     """Convert model filename to short display name."""
     return DEFAULT_MODEL_DISPLAY.get(name, name.replace("_", " ").title())
-
 
 def _normalize_marker_sizes(recon_error_norm: np.ndarray, *, base: float = 24.0, spread: float = 96.0) -> np.ndarray:
     values = np.asarray(recon_error_norm, dtype=np.float64)
@@ -60,7 +56,6 @@ def _normalize_marker_sizes(recon_error_norm: np.ndarray, *, base: float = 24.0,
     if np.any(valid):
         sizes[valid] = base + np.clip(values[valid], 0.0, 1.0) * spread
     return sizes
-
 
 def _infer_label_values(
     dataset: Any,
@@ -89,7 +84,6 @@ def _infer_label_values(
 
     return frame[candidate_columns].astype(str).agg("|".join, axis=1).to_numpy()
 
-
 def _compute_reconstruction_error(pred_df: pd.DataFrame) -> Optional[np.ndarray]:
     if "recon_error" in pred_df.columns:
         return pd.to_numeric(pred_df["recon_error"], errors="coerce").to_numpy(dtype=np.float64)
@@ -116,7 +110,6 @@ def _compute_reconstruction_error(pred_df: pd.DataFrame) -> Optional[np.ndarray]
         return np.sqrt(diffs[0])
     return np.sqrt(np.mean(np.column_stack(diffs), axis=1))
 
-
 def _save_tendency_heatmap(matrix: np.ndarray, *, out_png: Path, title: str) -> Optional[Path]:
     if matrix.size == 0:
         return None
@@ -135,7 +128,6 @@ def _save_tendency_heatmap(matrix: np.ndarray, *, out_png: Path, title: str) -> 
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return out_png
-
 
 def _build_latent_dataframe(
     *,
@@ -183,7 +175,6 @@ def _build_latent_dataframe(
         df["recon_error_norm"] = pd.NA
 
     return df
-
 
 def _plot_latent_matplotlib(
     latent_df: pd.DataFrame,
