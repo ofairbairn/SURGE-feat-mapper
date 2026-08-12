@@ -30,6 +30,7 @@ from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
 from .cluster import run_cluster_analysis
 from .data_preprocess import DataScaler
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
+from .anomaly.anomaly import run_anomaly_detection
 from .stability.stability import run_cluster_stability
 from .tendency import _summarize_cluster_tendency, save_tendency_heatmap
 from .viz import plot_mapper_latent, plot_mapper_pca, plot_mapper_reconstruction
@@ -250,6 +251,15 @@ def run_mapper_workflow(
         Z_train,
         Z_val,
         Z_test,
+        raw.train_index,
+        raw.val_index,
+        raw.test_index,
+    )
+    recon_payload = _compute_reconstruction_payload(
+        selected_adapter,
+        X_train,
+        X_val,
+        X_test,
         raw.train_index,
         raw.val_index,
         raw.test_index,
@@ -568,21 +578,98 @@ def run_mapper_workflow(
                 stability_report = {"status": "failed", "error": str(exc)}
                 print(f"[Mapper stability] failed: {exc}", flush=True)
 
+    anomaly_report: Optional[Dict[str, Any]] = None
+    anomaly_artifacts: Dict[str, str] = {}
+    anomaly_config = dict(getattr(spec, "mapper_anomaly", {}) or {})
+    if bool(anomaly_config.get("enabled", True)):
+        try:
+            selected_k_hint = (
+                int(clustering_report["k_selection"]["selected_k"])
+                if clustering_report is not None
+                and str(clustering_report.get("status", "")).lower() == "complete"
+                and clustering_report.get("k_selection", {}).get("selected_k") is not None
+                else None
+            )
+            anomaly_report, anomaly_arrays = run_anomaly_detection(
+                Z_all,
+                recon_error=(
+                    recon_payload["recon_error"] if recon_payload is not None else None
+                ),
+                n_clusters_hint=selected_k_hint,
+                top_n=int(anomaly_config.get("top_n", 100)),
+                reason_quantile=float(anomaly_config.get("reason_quantile", 0.90)),
+                hdbscan_min_cluster_size=int(
+                    clustering_config.get("hdbscan_min_cluster_size", 20)
+                ),
+                hdbscan_min_samples=(
+                    None
+                    if clustering_config.get("hdbscan_min_samples") is None
+                    else int(clustering_config["hdbscan_min_samples"])
+                ),
+                gmm_covariance_type=str(
+                    clustering_config.get("gmm_covariance_type", "full")
+                ),
+                isolation_forest_n_estimators=int(
+                    anomaly_config.get("isolation_forest_n_estimators", 200)
+                ),
+                isolation_forest_contamination=anomaly_config.get(
+                    "isolation_forest_contamination", "auto"
+                ),
+                lof_n_neighbors=int(anomaly_config.get("lof_n_neighbors", 20)),
+                lof_contamination=anomaly_config.get("lof_contamination", "auto"),
+                vendi_max_samples=(
+                    None
+                    if anomaly_config.get("vendi_max_samples", 200) is None
+                    else int(anomaly_config.get("vendi_max_samples", 200))
+                ),
+                rbf_bandwidth=anomaly_config.get("rbf_bandwidth"),
+                random_state=int(anomaly_config.get("random_state", spec.seed)),
+            )
+            if anomaly_report.get("status") == "complete":
+                for entry in anomaly_report["top_anomalies"]:
+                    entry["dataset_sample_index"] = int(all_indices[entry["sample_position"]])
+                anomaly_report["selected_representation"] = selected_rung
+                anomaly_report["embedding"] = {
+                    "space": "selected_model_latent_z",
+                    "scope": "train_val_test",
+                    "n_samples": int(len(Z_all)),
+                }
+
+                anomaly_dir = paths.root / "anomaly"
+                anomaly_dir.mkdir(parents=True, exist_ok=True)
+                anomaly_report_path = anomaly_dir / "anomaly_triage.json"
+                with anomaly_report_path.open("w", encoding="utf-8") as handle:
+                    json.dump(anomaly_report, handle, indent=2)
+                anomaly_arrays_path = anomaly_dir / "anomaly_scores.npz"
+                np.savez_compressed(
+                    anomaly_arrays_path,
+                    sample_index=all_indices,
+                    **anomaly_arrays,
+                )
+                anomaly_artifacts = {
+                    "report": posix_str(anomaly_report_path),
+                    "arrays": posix_str(anomaly_arrays_path),
+                }
+                top_entry = anomaly_report["top_anomalies"][0] if anomaly_report["top_anomalies"] else None
+                print(
+                    "[Mapper anomaly] "
+                    f"status={anomaly_report.get('status')}, "
+                    f"n_ranked={anomaly_report.get('n_ranked')}, "
+                    f"top_score={top_entry['combined_score'] if top_entry else None}",
+                    flush=True,
+                )
+            else:
+                print(f"[Mapper anomaly] status={anomaly_report.get('status')}", flush=True)
+        except Exception as exc:  # anomaly detection must not fail the workflow
+            anomaly_report = {"status": "failed", "error": str(exc)}
+            print(f"[Mapper anomaly] failed: {exc}", flush=True)
+
     viz_artifacts: Dict[str, Any] = {}
     visualization_config = dict(spec.mapper_visualization)
     if bool(visualization_config.get("enabled", True)):
         try:  # visualization must not fail the workflow
             viz_dir = paths.root / "visualization"
             viz_dir.mkdir(parents=True, exist_ok=True)
-            recon_payload = _compute_reconstruction_payload(
-                selected_adapter,
-                X_train,
-                X_val,
-                X_test,
-                raw.train_index,
-                raw.val_index,
-                raw.test_index,
-            )
             latent_result = plot_mapper_latent(
                 Z_all,
                 sample_indices=all_indices,
@@ -652,6 +739,8 @@ def run_mapper_workflow(
         metrics_payload["clustering"] = clustering_report
     if stability_report is not None:
         metrics_payload["stability"] = stability_report
+    if anomaly_report is not None:
+        metrics_payload["anomaly"] = anomaly_report
     save_metrics(metrics_payload, paths)
 
     split_sizes = {
@@ -696,6 +785,7 @@ def run_mapper_workflow(
         "clustering_decision": tendency_decision,
         "clustering": clustering_report,
         "stability": stability_report,
+        "anomaly": anomaly_report,
         "next_stage": (
             None
             if clustering_report is not None
@@ -715,6 +805,7 @@ def run_mapper_workflow(
             "tendency": tendency_artifacts,
             "clustering": clustering_artifacts,
             "stability": stability_artifacts,
+            "anomaly": anomaly_artifacts,
             "visualization": viz_artifacts,
             "spec": posix_str(paths.spec_file),
             "summary": posix_str(paths.summary_file),
