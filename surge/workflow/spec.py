@@ -95,6 +95,9 @@ class SurrogateWorkflowSpec:
     mapper_anomaly: Dict[str, Any] = field(default_factory=dict)
     # Latent + reconstruction plot emission at the end of a Mapper run.
     mapper_visualization: Dict[str, Any] = field(default_factory=dict)
+    # Missing-value detection, missingno plots, and MCAR testing on the raw
+    # Mapper input data (before the engine drops NaN rows).
+    mapper_preprocess: Dict[str, Any] = field(default_factory=dict)
     # HDF5 leaf name under run*/sparc_* (default: sdata_pertfields_grid_complex_v2.h5).
     # Use sdata_complex_v2.h5 on CFS-style trees where that file holds nonsymmetric δp modes.
     batch_dir_filename: Optional[str] = None

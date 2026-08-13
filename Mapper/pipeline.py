@@ -28,7 +28,7 @@ from surge.utils import posix_str
 from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
 
 from .cluster import run_cluster_analysis
-from .data_preprocess import DataScaler
+from .data_preprocess import DataScaler, analyze_missingness
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
 from .anomaly.anomaly import run_anomaly_detection
 from .stability.stability import run_cluster_stability
@@ -138,6 +138,54 @@ def run_mapper_workflow(
         split_payload["X_test"] = X_test
         split_payload["test_index"] = raw.test_index
     np.savez_compressed(splits_path, **split_payload)
+
+    ###PREPROCESSING/MISSING VALUES MODULE###
+    preprocessing_report: Optional[Dict[str, Any]] = None
+    preprocessing_artifacts: Dict[str, Any] = {}
+    preprocessing_config = dict(spec.mapper_preprocess)
+    if bool(preprocessing_config.get("enabled", True)):
+        try:  # missing-value reporting must not fail the workflow
+            preprocess_dir = paths.root / "preprocessing"
+            preprocess_dir.mkdir(parents=True, exist_ok=True)
+            preprocessing_report = analyze_missingness(
+                dataset.df,
+                preprocess_dir,
+                random_state=spec.seed,
+                save_plots=bool(preprocessing_config.get("save_plots", True)),
+                run_mcar_test=bool(preprocessing_config.get("run_mcar_test", True)),
+            )
+            preprocessing_report_path = (
+                preprocess_dir / "data_preprocessing.json"
+            )
+            with preprocessing_report_path.open("w", encoding="utf-8") as handle:
+                json.dump(preprocessing_report, handle, indent=2)
+            preprocessing_artifacts = {
+                "report": posix_str(preprocessing_report_path),
+            }
+            for kind, name in (preprocessing_report.get("plots") or {}).items():
+                preprocessing_artifacts[f"plot_{kind}"] = posix_str(
+                    preprocess_dir / name
+                )
+            mcar_result = preprocessing_report.get("mcar_test") or {}
+            little_p = mcar_result.get("little_pvalue")
+            print(
+                "[Mapper Preprocess] "
+                f"status=complete, robust_scaling=done, "
+                f"missing_values_detected="
+                f"{preprocessing_report.get('missing_values_detected')}, "
+                f"completeness="
+                f"{preprocessing_report.get('completeness_percent')}%, "
+                f"missing_cells={preprocessing_report.get('n_missing_cells')}"
+                + (
+                    f", little_mcar_p={little_p:.4f}"
+                    if isinstance(little_p, (int, float))
+                    else ""
+                ),
+                flush=True,
+            )
+        except Exception as exc:
+            preprocessing_report = {"status": "failed", "error": str(exc)}
+            print(f"[Mapper Preprocess] failed: {exc}", flush=True)
 
     save_spec(spec.to_dict(), paths)
     save_environment_snapshot(paths)
@@ -761,6 +809,8 @@ def run_mapper_workflow(
     metrics_payload: Dict[str, Any] = {
         "representation_ladder": ladder_results,
     }
+    if preprocessing_report is not None:
+        metrics_payload["preprocessing"] = preprocessing_report
     if diversity_report is not None:
         metrics_payload["diversity"] = diversity_report
     if tendency_report is not None:
@@ -797,6 +847,7 @@ def run_mapper_workflow(
             "with_scaling": scaler.with_scaling,
             "quantile_range": list(scaler.quantile_range),
         },
+        "preprocessing": preprocessing_report,
         "representation_ladder": {
             "order": list(_LADDER_RUNGS),
             "gate_split": "val",
@@ -828,6 +879,7 @@ def run_mapper_workflow(
             "scaled_splits": posix_str(splits_path),
             "latent_splits": posix_str(latent_path),
             "metrics": posix_str(paths.metrics_file),
+            "preprocessing": preprocessing_artifacts,
             "diversity": diversity_artifacts,
             "tendency": tendency_artifacts,
             "clustering": clustering_artifacts,

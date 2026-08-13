@@ -16,6 +16,10 @@ hdbscan>=0.8.40
 vendi-score>=0.0.3
 shap>=0.52.0
 
+# Missing-value diagnostics (Mapper preprocessing report)
+missingno>=0.5.2
+pyampute>=0.0.3
+
 # Optional dependencies for enhanced models
 # PyTorch for enhanced MLP models
 torch>=1.9.0
