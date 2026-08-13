@@ -114,7 +114,7 @@ def run_mapper_workflow(
     )
     engine.prepare()
     raw = engine.get_raw_splits()
-
+    ###DATA LOADER/SCALER MODULE###
     scaler = DataScaler()
     X_train = scaler.fit_transform(raw.X_train)
     X_val = scaler.transform(raw.X_val)
@@ -147,7 +147,7 @@ def run_mapper_workflow(
         spec_source = invocation.get("spec_path")
         if spec_source:
             copy_invoked_config_source(paths, Path(spec_source))
-
+        ###REPRESENTATION STEPS###
     ladder_results = []
     rung_adapters: Dict[str, Any] = {}
     selected_adapter = None
@@ -284,7 +284,7 @@ def run_mapper_workflow(
         raw.val_index,
         raw.test_index,
     )
-
+        ###DIVERSITY MODULE STEP###
     diversity_report: Optional[Dict[str, Any]] = None
     diversity_artifacts: Dict[str, str] = {}
     diversity_config = dict(spec.mapper_diversity)
