@@ -22,6 +22,9 @@ except ImportError:  # pragma: no cover - optional dependency
     trange = None  # type: ignore[assignment]
     TQDM_AVAILABLE = False
 
+_LOGVAR_MIN = -10.0
+_LOGVAR_MAX = 10.0
+
 try:
     import torch
     import torch.nn as nn
@@ -71,7 +74,10 @@ def _is_same_shape(a: np.ndarray, b: np.ndarray) -> bool:
 
 #kullback-leibler divergence
 def _kl_divergence_from_gaussian_params(mu: np.ndarray, logvar: np.ndarray) -> float:
-    kl = -0.5 * np.mean(1.0 + logvar - np.square(mu) - np.exp(logvar))
+    bounded_logvar = np.clip(logvar, _LOGVAR_MIN, _LOGVAR_MAX)
+    kl = -0.5 * np.mean(
+        1.0 + bounded_logvar - np.square(mu) - np.exp(bounded_logvar)
+    )
     return float(kl)
 
 
@@ -164,7 +170,8 @@ if TORCH_AVAILABLE:
             return self.fc_mu(h), self.fc_logvar(h)
 
         def reparameterize(self, mu, logvar):
-            std = torch.exp(0.5 * logvar)
+            bounded_logvar = torch.clamp(logvar, min=_LOGVAR_MIN, max=_LOGVAR_MAX)
+            std = torch.exp(0.5 * bounded_logvar)
             eps = torch.randn_like(std)
             return mu + eps * std
 
@@ -200,6 +207,7 @@ class UnsupervisedVAEModel:
         n_epochs: int = 150,
         batch_size: int = 128,
         beta: float = 1.0,
+        max_grad_norm: Optional[float] = 1.0,
         random_state: int = 42,
         device: Optional[str] = None,
         dataloader_num_workers: int = 0,
@@ -221,6 +229,11 @@ class UnsupervisedVAEModel:
         self.n_epochs = int(n_epochs)
         self.batch_size = int(batch_size)
         self.beta = float(beta)
+        if max_grad_norm is not None and float(max_grad_norm) <= 0.0:
+            raise ValueError("max_grad_norm must be positive or None")
+        self.max_grad_norm = (
+            None if max_grad_norm is None else float(max_grad_norm)
+        )
         self.random_state = int(random_state)
         self.verbose = bool(verbose)
         self.log_file = log_file
@@ -243,8 +256,11 @@ class UnsupervisedVAEModel:
         mu,
         logvar,
     ):
+        bounded_logvar = torch.clamp(logvar, min=_LOGVAR_MIN, max=_LOGVAR_MAX)
         recon_loss = torch.mean((recon_x - x) ** 2)
-        kl = -0.5 * torch.mean(1.0 + logvar - mu.pow(2) - logvar.exp())
+        kl = -0.5 * torch.mean(
+            1.0 + bounded_logvar - mu.pow(2) - bounded_logvar.exp()
+        )
         total = recon_loss + self.beta * kl
         return total, recon_loss, kl
 
@@ -323,7 +339,32 @@ class UnsupervisedVAEModel:
                 optimizer.zero_grad()
                 recon, mu, logvar = self.model(batch_x)
                 loss, recon_loss, kl = self._loss_components(recon, batch_x, mu, logvar)
+                if not all(
+                    torch.isfinite(value).all()
+                    for value in (recon, mu, logvar, loss, recon_loss, kl)
+                ):
+                    raise FloatingPointError(
+                        "Unsupervised VAE produced a non-finite training value "
+                        f"at epoch={epoch}, batch_size={batch_x.size(0)}. "
+                        f"logvar is clamped to [{_LOGVAR_MIN}, {_LOGVAR_MAX}]; "
+                        "check input scale, beta, and learning_rate."
+                    )
                 loss.backward()
+                if self.max_grad_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.max_grad_norm
+                    )
+                if any(
+                    parameter.grad is not None
+                    and not torch.isfinite(parameter.grad).all()
+                    for parameter in self.model.parameters()
+                ):
+                    raise FloatingPointError(
+                        "Unsupervised VAE produced a non-finite gradient "
+                        f"at epoch={epoch}, batch_size={batch_x.size(0)}. "
+                        f"Gradient clipping was applied with max_grad_norm={self.max_grad_norm}; "
+                        "check input scale, beta, and learning_rate."
+                    )
                 optimizer.step()
 
                 bs = batch_x.size(0)
@@ -349,6 +390,14 @@ class UnsupervisedVAEModel:
                         batch_val = batch_val.to(self.device, non_blocking=True)
                         recon, mu, logvar = self.model(batch_val)
                         loss, recon_loss, kl = self._loss_components(recon, batch_val, mu, logvar)
+                        if not all(
+                            torch.isfinite(value).all()
+                            for value in (recon, mu, logvar, loss, recon_loss, kl)
+                        ):
+                            raise FloatingPointError(
+                                "Unsupervised VAE produced a non-finite validation value "
+                                f"at epoch={epoch}, batch_size={batch_val.size(0)}."
+                            )
                         bs = batch_val.size(0)
                         val_count += bs
                         val_loss_total += float(loss.detach().cpu().item()) * bs
@@ -507,6 +556,7 @@ class UnsupervisedVAEModel:
                     "n_epochs": self.n_epochs,
                     "batch_size": self.batch_size,
                     "beta": self.beta,
+                    "max_grad_norm": self.max_grad_norm,
                     "random_state": self.random_state,
                     "input_dim": self.input_dim,
                 },
@@ -529,6 +579,12 @@ class UnsupervisedVAEModel:
         self.n_epochs = int(cfg["n_epochs"])
         self.batch_size = int(cfg["batch_size"])
         self.beta = float(cfg["beta"])
+        saved_max_grad_norm = cfg.get("max_grad_norm", self.max_grad_norm)
+        self.max_grad_norm = (
+            None
+            if saved_max_grad_norm is None
+            else float(saved_max_grad_norm)
+        )
         self.random_state = int(cfg["random_state"])
         self.input_dim = cfg.get("input_dim")
         if self.input_dim is not None:

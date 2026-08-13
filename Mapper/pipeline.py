@@ -250,11 +250,21 @@ def run_mapper_workflow(
     )
     if selected_adapter is None or selected_rung is None:  # pragma: no cover
         raise RuntimeError("Mapper representation ladder did not run any models.")
+    #added 254-257 to check for nans
+    _check_split_finiteness(
+        {"X_train": X_train, "X_val": X_val, "X_test": X_test},
+        stage="scaled_inputs",
+    )
 
     Z_train = np.asarray(selected_adapter.encode(X_train))
     Z_val = np.asarray(selected_adapter.encode(X_val))
     Z_test = (
         np.asarray(selected_adapter.encode(X_test)) if X_test is not None else None
+    )
+    #added 265-268 to check for nans
+    _check_split_finiteness(
+        {"Z_train": Z_train, "Z_val": Z_val, "Z_test": Z_test},
+        stage="latent_embeddings",
     )
     latent_path = paths.root / "mapper_latent_splits.npz"
     latent_payload = {
@@ -830,6 +840,53 @@ def run_mapper_workflow(
     }
     save_workflow_summary(summary, paths)
     return summary
+
+#844-890 added to check for nans in scaled inputs and latent embeddings.
+def _check_split_finiteness(
+    arrays: Mapping[str, np.ndarray],
+    *,
+    stage: str,
+) -> None:
+    """Raise a diagnostic error when any split array contains NaN or inf.
+
+    ``stage`` names where the non-finite values were produced so the message
+    points at the root cause: ``scaled_inputs`` (case 1) is a RobustScaler
+    divide-by-zero from a constant column in the train split; ``latent_embeddings``
+    (case 2) is a diverged AE/VAE encoder.
+    """
+    offenders: list[str] = []
+    for name, arr in arrays.items():
+        if arr is None:
+            continue
+        finite = np.isfinite(arr)
+        if bool(finite.all()):
+            continue
+        bad = ~finite
+        n_bad = int(np.count_nonzero(bad))
+        detail = f"{name}: {n_bad} non-finite of {int(arr.size)} values"
+        if arr.ndim == 2:
+            bad_rows = np.unique(np.where(bad)[0])[:5]
+            bad_cols = np.unique(np.where(bad)[1])[:5]
+            detail += (
+                f" (sample rows {list(int(r) for r in bad_rows)}, "
+                f"feature cols {list(int(c) for c in bad_cols)})"
+            )
+        offenders.append(detail)
+    if not offenders:
+        return
+    hint = (
+        "This usually means a constant column (zero IQR) in the training "
+        "split made RobustScaler divide by zero."
+        if stage == "scaled_inputs"
+        else "This usually means the selected AE/VAE diverged during "
+        "training and produced non-finite weights."
+    )
+    raise ValueError(
+        "[Mapper] non-finite values in "
+        f"{stage} after the representation ladder:\n  "
+        + "\n  ".join(offenders)
+        + f"\n{hint}"
+    )
 
 
 def _compute_reconstruction_payload(

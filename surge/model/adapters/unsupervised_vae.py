@@ -65,6 +65,7 @@ class UnsupervisedVAEAdapter(BaseModelAdapter):
         "n_epochs": 150,
         "batch_size": 128,
         "beta": 1.0,
+        "max_grad_norm": 1.0,
         "random_state": 42,
         "verbose": False,
     }
