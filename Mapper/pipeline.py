@@ -658,6 +658,7 @@ def run_mapper_workflow(
 
     anomaly_report: Optional[Dict[str, Any]] = None
     anomaly_artifacts: Dict[str, str] = {}
+    anomaly_arrays: Optional[Dict[str, np.ndarray]] = None
     anomaly_config = dict(spec.mapper_anomaly)
     if bool(anomaly_config.get("enabled", True)):
         try:
@@ -756,6 +757,11 @@ def run_mapper_workflow(
                 cluster_labels=None,
                 recon_error=(
                     recon_payload["recon_error"] if recon_payload is not None else None
+                ),
+                anomaly_score=(
+                    anomaly_arrays.get("combined_score")
+                    if anomaly_arrays is not None
+                    else None
                 ),
                 hdbscan_min_cluster_size=int(
                     clustering_config.get("hdbscan_min_cluster_size", 20)

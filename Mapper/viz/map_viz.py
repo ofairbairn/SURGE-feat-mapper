@@ -32,7 +32,7 @@ from Mapper.cluster.cluster import (
     _cluster_latent_embeddings,
     _compute_latent_quality_metrics,
 )
-from Mapper.tendency.hopkins_vat import _summarize_cluster_tendency
+from Mapper.tendency.tendency import _summarize_cluster_tendency
 
 LOG = logging.getLogger(__name__)
 
@@ -48,14 +48,6 @@ DEFAULT_MODEL_DISPLAY = {
 def _model_short_name(name: str) -> str:
     """Convert model filename to short display name."""
     return DEFAULT_MODEL_DISPLAY.get(name, name.replace("_", " ").title())
-
-def _normalize_marker_sizes(recon_error_norm: np.ndarray, *, base: float = 24.0, spread: float = 96.0) -> np.ndarray:
-    values = np.asarray(recon_error_norm, dtype=np.float64)
-    sizes = np.full(values.shape, base, dtype=np.float64)
-    valid = np.isfinite(values)
-    if np.any(valid):
-        sizes[valid] = base + np.clip(values[valid], 0.0, 1.0) * spread
-    return sizes
 
 def _infer_label_values(
     dataset: Any,
@@ -137,6 +129,7 @@ def _build_latent_dataframe(
     label: Optional[np.ndarray] = None,
     cluster: Optional[np.ndarray] = None,
     recon_error: Optional[np.ndarray] = None,
+    anomaly_score: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
     df = pd.DataFrame(
         {
@@ -174,7 +167,31 @@ def _build_latent_dataframe(
         df["recon_error"] = pd.NA
         df["recon_error_norm"] = pd.NA
 
+    if anomaly_score is not None:
+        score_arr = np.asarray(anomaly_score, dtype=np.float64).reshape(-1)
+        df["combined_anomaly_score"] = score_arr
+    else:
+        df["combined_anomaly_score"] = np.nan
+
     return df
+
+def _compute_axis_limits(
+    frame: pd.DataFrame,
+    *,
+    pad_fraction: float = 0.02,
+) -> Optional[Tuple[float, float, float, float]]:
+    """Axis ranges covering every point in ``frame`` so nothing is clipped."""
+    x = pd.to_numeric(frame["x"], errors="coerce").to_numpy(dtype=np.float64)
+    y = pd.to_numeric(frame["y"], errors="coerce").to_numpy(dtype=np.float64)
+    x_valid = x[np.isfinite(x)]
+    y_valid = y[np.isfinite(y)]
+    if x_valid.size == 0 or y_valid.size == 0:
+        return None
+    x_min, x_max = float(np.min(x_valid)), float(np.max(x_valid))
+    y_min, y_max = float(np.min(y_valid)), float(np.max(y_valid))
+    x_pad = max(x_max - x_min, 1e-12) * pad_fraction
+    y_pad = max(y_max - y_min, 1e-12) * pad_fraction
+    return (x_min - x_pad, x_max + x_pad, y_min - y_pad, y_max + y_pad)
 
 def _plot_latent_matplotlib(
     latent_df: pd.DataFrame,
@@ -182,38 +199,61 @@ def _plot_latent_matplotlib(
     title: str,
     out_png: Path,
     color_by: str = "label",
+    color_scores: Optional[np.ndarray] = None,
+    axis_limits: Optional[Tuple[float, float, float, float]] = None,
 ) -> None:
     import matplotlib
     import matplotlib.pyplot as plt
 
-    if color_by not in latent_df.columns or latent_df[color_by].isna().all():
-        color_by = "cluster" if "cluster" in latent_df.columns and not latent_df["cluster"].isna().all() else "label"
-
     plot_df = latent_df.copy()
-    color_values = plot_df[color_by].astype("string").fillna("NA")
-    unique_values = list(pd.unique(color_values))
-    cmap_name = "tab10" if len(unique_values) <= 10 else "tab20"
-    try:
-        cmap_obj = matplotlib.colormaps.get_cmap(cmap_name).resampled(max(len(unique_values), 1))
-    except AttributeError:
-        cmap_obj = plt.get_cmap(cmap_name, max(len(unique_values), 1))
-    color_map = {value: cmap_obj(i) for i, value in enumerate(unique_values)}
 
-    sizes = _normalize_marker_sizes(plot_df["recon_error_norm"].to_numpy(dtype=np.float64))
+    score_values: Optional[np.ndarray] = None
+    if color_scores is not None:
+        candidate = np.asarray(color_scores, dtype=np.float64).reshape(-1)
+        if candidate.shape[0] == len(plot_df) and np.any(np.isfinite(candidate)):
+            score_values = candidate
+
     fig, ax = plt.subplots(figsize=(8, 6))
-    for value in unique_values:
-        mask = color_values == value
-        ax.scatter(
-            plot_df.loc[mask, "x"],
-            plot_df.loc[mask, "y"],
-            s=sizes[mask],
-            c=[color_map[value]],
+
+    if score_values is not None:
+        im = ax.scatter(
+            plot_df["x"],
+            plot_df["y"],
+            s=18,
+            c=score_values,
+            cmap="viridis",
             alpha=0.75,
-            label=str(value),
             edgecolors="none",
         )
+        colorbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        colorbar.set_label("Combined anomaly score")
+    else:
+        if color_by not in plot_df.columns or plot_df[color_by].isna().all():
+            color_by = "cluster" if "cluster" in plot_df.columns and not plot_df["cluster"].isna().all() else "label"
 
-    if "cluster" in plot_df.columns:
+        color_values = plot_df[color_by].astype("string").fillna("NA")
+        unique_values = list(pd.unique(color_values))
+        cmap_name = "tab10" if len(unique_values) <= 10 else "tab20"
+        try:
+            cmap_obj = matplotlib.colormaps.get_cmap(cmap_name).resampled(max(len(unique_values), 1))
+        except AttributeError:
+            cmap_obj = plt.get_cmap(cmap_name, max(len(unique_values), 1))
+        color_map = {value: cmap_obj(i) for i, value in enumerate(unique_values)}
+
+        for value in unique_values:
+            mask = color_values == value
+            ax.scatter(
+                plot_df.loc[mask, "x"],
+                plot_df.loc[mask, "y"],
+                s=18,
+                c=[color_map[value]],
+                alpha=0.75,
+                label=str(value),
+                edgecolors="none",
+            )
+        ax.legend(title=color_by, bbox_to_anchor=(1.05, 1), loc="upper left", borderaxespad=0)
+
+    if axis_limits is None and "cluster" in plot_df.columns:
         centroid_rows = plot_df[
             plot_df["cluster"].notna() & (plot_df["cluster"].astype("string") != "-1")
         ]
@@ -234,7 +274,9 @@ def _plot_latent_matplotlib(
     ax.set_title(title)
     ax.set_xlabel("Dim 1")
     ax.set_ylabel("Dim 2")
-    ax.legend(title=color_by, bbox_to_anchor=(1.05, 1), loc="upper left", borderaxespad=0)
+    if axis_limits is not None:
+        ax.set_xlim(axis_limits[0], axis_limits[1])
+        ax.set_ylim(axis_limits[2], axis_limits[3])
     fig.tight_layout()
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -431,6 +473,7 @@ def _save_embedding(
     label_values: Optional[np.ndarray],
     cluster_labels: Optional[np.ndarray],
     recon_error: Optional[np.ndarray],
+    anomaly_score: Optional[np.ndarray],
     model_name: str,
     split: str,
     embedding_type: str,
@@ -445,7 +488,14 @@ def _save_embedding(
     tendency_summary: Optional[Dict[str, Any]],
     latent_quality_n_neighbors: int,
 ) -> List[str]:
-    """Build, serialize, and plot one 2-D embedding of a latent space."""
+    """Build, serialize, and plot one 2-D embedding of a latent space.
+
+    UMAP renders the whole dataset in one plot. t-SNE renders one zoomed-in
+    plot per cluster found by the clustering step (axes cover every point in
+    that cluster); if no clusters exist it falls back to a single whole-dataset
+    plot. Points are a fixed size and colored by the combined anomaly score
+    from ``Mapper.anomaly`` when available.
+    """
     saved: List[str] = []
     embedding_df = _build_latent_dataframe(
         sample_id=sample_indices,
@@ -454,17 +504,35 @@ def _save_embedding(
         label=label_values,
         cluster=cluster_labels,
         recon_error=recon_error,
+        anomaly_score=anomaly_score,
     )
     embedding_df["model_name"] = model_name
     embedding_df["split"] = split
 
-    if recon_error is not None:
-        recon_arr = np.asarray(recon_error, dtype=np.float64)
-        valid_recon = np.isfinite(recon_arr)
-        threshold = float(np.nanquantile(recon_arr[valid_recon], anomaly_quantile)) if np.any(valid_recon) else np.nan
-        embedding_df["anomaly_score"] = embedding_df["recon_error_norm"]
+    combined_scores: Optional[np.ndarray] = None
+    if "combined_anomaly_score" in embedding_df.columns:
+        candidate = pd.to_numeric(
+            embedding_df["combined_anomaly_score"], errors="coerce"
+        ).to_numpy(dtype=np.float64)
+        if np.any(np.isfinite(candidate)):
+            combined_scores = candidate
+
+    score_source: Optional[np.ndarray] = None
+    if combined_scores is not None:
+        score_source = combined_scores
+    elif recon_error is not None:
+        score_source = embedding_df["recon_error_norm"].to_numpy(dtype=np.float64)
+
+    if score_source is not None:
+        valid_score = np.isfinite(score_source)
+        threshold = (
+            float(np.nanquantile(score_source[valid_score], anomaly_quantile))
+            if np.any(valid_score)
+            else np.nan
+        )
+        embedding_df["anomaly_score"] = score_source
         embedding_df["anomaly_flag"] = (
-            embedding_df["recon_error"].astype("float64") >= threshold
+            score_source >= threshold
         ) if np.isfinite(threshold) else False
         embedding_df["anomaly_threshold"] = threshold
 
@@ -496,27 +564,81 @@ def _save_embedding(
         json.dump(quality_payload, handle, indent=2)
     saved.append(str(quality_path))
 
-    png_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.png"
-    _plot_latent_matplotlib(
-        embedding_df,
-        title=title,
-        out_png=png_path,
-        color_by=color_by,
-    )
-    saved.append(str(png_path))
+    cluster_ids: List[int] = []
+    member_masks: Dict[int, np.ndarray] = {}
+    if cluster_labels is not None:
+        cluster_arr = np.asarray(cluster_labels).reshape(-1)
+        if cluster_arr.shape[0] == len(embedding_df):
+            for value in np.unique(cluster_arr):
+                try:
+                    cluster_id = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if cluster_id == -1:
+                    continue
+                cluster_ids.append(cluster_id)
+                member_masks[cluster_id] = cluster_arr == cluster_id
+            cluster_ids.sort()
 
-    html_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.html"
-    html_saved = _plot_latent_interactive(
-        embedding_df,
-        title=title,
-        out_html=html_path,
-        color_by=color_by,
-        random_state=random_state,
-        hover_sample_frac=interactive_hover_sample_frac,
-        datashader_threshold=interactive_threshold,
-    )
-    if html_saved is not None:
-        saved.append(str(html_saved))
+    if embedding_type == "tsne" and cluster_ids:
+        for cluster_number, cluster_id in enumerate(cluster_ids, start=1):
+            member_mask = member_masks[cluster_id]
+            cluster_df = embedding_df.loc[member_mask]
+            cluster_scores = (
+                combined_scores[member_mask] if combined_scores is not None else None
+            )
+            cluster_title = (
+                f"{_model_short_name(model_name)} {split} cluster {cluster_number} t-SNE"
+            )
+            cluster_png = output_dir / (
+                f"latent_{safe_model_name}_{split}_{embedding_type}_cluster_{cluster_number}.png"
+            )
+            _plot_latent_matplotlib(
+                cluster_df,
+                title=cluster_title,
+                out_png=cluster_png,
+                color_scores=cluster_scores,
+                axis_limits=_compute_axis_limits(cluster_df),
+            )
+            saved.append(str(cluster_png))
+
+            cluster_html = output_dir / (
+                f"latent_{safe_model_name}_{split}_{embedding_type}_cluster_{cluster_number}.html"
+            )
+            cluster_html_saved = _plot_latent_interactive(
+                cluster_df,
+                title=cluster_title,
+                out_html=cluster_html,
+                color_by=color_by,
+                random_state=random_state,
+                hover_sample_frac=interactive_hover_sample_frac,
+                datashader_threshold=interactive_threshold,
+            )
+            if cluster_html_saved is not None:
+                saved.append(str(cluster_html_saved))
+    else:
+        png_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.png"
+        _plot_latent_matplotlib(
+            embedding_df,
+            title=title,
+            out_png=png_path,
+            color_by=color_by,
+            color_scores=combined_scores,
+        )
+        saved.append(str(png_path))
+
+        html_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.html"
+        html_saved = _plot_latent_interactive(
+            embedding_df,
+            title=title,
+            out_html=html_path,
+            color_by=color_by,
+            random_state=random_state,
+            hover_sample_frac=interactive_hover_sample_frac,
+            datashader_threshold=interactive_threshold,
+        )
+        if html_saved is not None:
+            saved.append(str(html_saved))
     return saved
 
 
@@ -849,6 +971,7 @@ def viz_unsupervised_latent(
                         label_values=label_values,
                         cluster_labels=cluster_labels,
                         recon_error=recon_error,
+                        anomaly_score=None,
                         model_name=model_name,
                         split=split,
                         embedding_type=embedding_type,
@@ -1134,6 +1257,7 @@ def plot_mapper_latent(
     split: str = "train_val_test",
     cluster_labels: Optional[np.ndarray] = None,
     recon_error: Optional[np.ndarray] = None,
+    anomaly_score: Optional[np.ndarray] = None,
     cluster_method: str = "hdbscan",
     hdbscan_min_cluster_size: int = 20,
     hdbscan_min_samples: Optional[int] = None,
@@ -1154,6 +1278,9 @@ def plot_mapper_latent(
     Unlike ``viz_unsupervised_latent`` (which reloads dataset/scalers/models
     from a run directory), this renders from the arrays the Mapper pipeline
     already holds, so the plots land in the run's output folder at run end.
+    ``anomaly_score`` is the per-sample combined anomaly score from
+    ``Mapper.anomaly.run_anomaly_detection``; points are colored by it with a
+    colorbar.
     """
     import matplotlib
 
@@ -1162,6 +1289,18 @@ def plot_mapper_latent(
     Z = np.asarray(Z, dtype=np.float64)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    anomaly_scores: Optional[np.ndarray] = None
+    if anomaly_score is not None:
+        candidate = np.asarray(anomaly_score, dtype=np.float64).reshape(-1)
+        if candidate.shape[0] == Z.shape[0]:
+            anomaly_scores = candidate
+        else:
+            LOG.warning(
+                "Anomaly score length %s does not match latent rows %s; ignoring.",
+                int(candidate.shape[0]),
+                int(Z.shape[0]),
+            )
 
     tendency = tendency_summary or _summarize_cluster_tendency(
         Z,
@@ -1230,6 +1369,7 @@ def plot_mapper_latent(
                 label_values=None,
                 cluster_labels=labels,
                 recon_error=recon_error,
+                anomaly_score=anomaly_scores,
                 model_name=model_name,
                 split=split,
                 embedding_type=embedding_type,
