@@ -1,14 +1,14 @@
 workflow:
   workflow_type: mapper
-  dataset_path: runs/generated_datasets/swiss_roll_incomplete.csv
+  dataset_path: runs/generated_datasets/swiss_roll.csv
   dataset_format: csv
   task_type: unsupervised
   test_fraction: 0.2
   val_fraction: 0.1
   seed: 42
   output_dir: runs
-  run_tag: swiss_roll_mapper
-  overwrite_existing_run: true
+  run_tag: swiss_mapper
+  overwrite_existing_run: false
 
   # Zero thresholds force every rung to run so their validation RMSE values
   # can be compared; the smallest-RMSE rung supplies the final latent.
