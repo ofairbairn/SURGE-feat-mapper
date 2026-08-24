@@ -423,7 +423,7 @@ def run_mapper_workflow(
         tendency_summary = _summarize_cluster_tendency(
             Z_tendency,
             hopkins_threshold=float(
-                tendency_config.get("hopkins_threshold", 0.55)
+                tendency_config.get("hopkins_threshold", 0.65)
             ),
             sample_size=tendency_config.get("hopkins_sample_size"),
             random_state=tendency_random_state,
@@ -780,7 +780,7 @@ def run_mapper_workflow(
                 ),
                 tendency_summary=tendency_report,
                 hopkins_threshold=float(
-                    tendency_config.get("hopkins_threshold", 0.55)
+                    tendency_config.get("hopkins_threshold", 0.65)
                 ),
                 save_tendency_artifacts=False,
             )

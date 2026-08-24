@@ -1,0 +1,96 @@
+workflow:
+  workflow_type: mapper
+  dataset_path: runs/generated_datasets/uniform_4d.csv
+  dataset_format: csv
+  task_type: unsupervised
+  test_fraction: 0.2
+  val_fraction: 0.1
+  seed: 42
+  output_dir: runs
+  run_tag: 4dsynth_data
+  overwrite_existing_run: false
+
+  # Zero thresholds force every rung to run so their validation RMSE values
+  # can be compared; the smallest-RMSE rung supplies the final latent.
+  unsupervised_ladder_thresholds:
+    pca_max_recon_rmse: 0.15
+    ae_max_recon_rmse: 0.15
+    vae_max_recon_rmse: 0.15
+
+  mapper_diversity:
+    enabled: true
+    kernel: rbf
+    max_samples: 1000
+    save_similarity_matrix: true
+
+  mapper_tendency:
+    enabled: true
+    hopkins_threshold: 0.65
+    hopkins_sample_size: null
+    max_samples: 800
+    random_state: 42
+
+  mapper_clustering:
+    enabled: true
+    k_anchor: null
+    k_max: 8
+    k_window: 1
+    gap_k_max: 6
+    gap_n_references: 3
+    vendi_max_samples: 200
+    hdbscan_min_cluster_size: 20
+    hdbscan_min_samples: 5
+    gmm_covariance_type: full
+    random_state: 42
+
+  mapper_stability:
+    enabled: true
+    n_bootstraps: 10
+    bootstrap_fraction: 0.8
+    max_samples: 800
+    random_state: 42
+
+  mapper_anomaly:
+    enabled: true
+    top_n: 10
+    reason_quantile: 0.9
+    isolation_forest_n_estimators: 100
+    lof_n_neighbors: 20
+    vendi_max_samples: 200
+    random_state: 42
+
+  mapper_visualization:
+    enabled: true
+    random_state: 42
+
+  models:
+    - key: sklearn.pca
+      name: PCA
+      params:
+        n_components: 2
+        svd_solver: auto
+        whiten: false
+
+    - key: pytorch.autoencoder
+      name: Autoencoder
+      params:
+        latent_dim: 2
+        hidden_dims: [124, 64, 32, 16, 8]
+        n_epochs: 75
+        batch_size: 128
+        learning_rate: 0.001
+        device: cpu
+        verbose: false
+
+    - key: pytorch.unsupervised_vae
+      name: VAE
+      params:
+        latent_dim: 2
+        hidden_dims: [124, 64, 32, 16, 8]
+        n_epochs: 75
+        batch_size: 128
+        learning_rate: 0.001
+        beta: 1.0
+        max_grad_norm: 1.0
+        device: cpu
+        verbose: false

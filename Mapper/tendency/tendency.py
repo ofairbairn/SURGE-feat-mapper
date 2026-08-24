@@ -131,7 +131,7 @@ def _ivat_from_vat(
 def _summarize_cluster_tendency(
     latent: np.ndarray,
     *,
-    hopkins_threshold: float = 0.55,
+    hopkins_threshold: float = 0.65,
     sample_size: Optional[int] = None,
     random_state: int = 42,
 ) -> Dict[str, Any]:
