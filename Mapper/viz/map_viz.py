@@ -422,8 +422,13 @@ def _fit_2d_embeddings(
     Z: np.ndarray,
     *,
     random_state: int = 42,
+    include_tsne: bool = True,
 ) -> List[Tuple[str, np.ndarray]]:
-    """Compute UMAP and t-SNE 2-D projections of a latent matrix."""
+    """Compute UMAP and t-SNE 2-D projections of a latent matrix.
+
+    When ``include_tsne`` is False the t-SNE projection is skipped entirely
+    (used when the Hopkins tendency gate finds no clusterable structure).
+    """
     Z = np.asarray(Z, dtype=np.float64)
     embeddings: List[Tuple[str, np.ndarray]] = []
 
@@ -443,24 +448,25 @@ def _fit_2d_embeddings(
     except Exception as exc:
         LOG.warning("UMAP failed: %s", exc)
 
-    try:
-        from sklearn.manifold import TSNE
-
-        perplexity = float(min(30, max(5, Z.shape[0] // 10)))
-        tsne_kwargs = {
-            "n_components": 2,
-            "perplexity": perplexity,
-            "learning_rate": 200,
-            "random_state": random_state,
-            "init": "pca",
-        }
+    if include_tsne:
         try:
-            tsne = TSNE(max_iter=1000, **tsne_kwargs)
-        except TypeError:
-            tsne = TSNE(n_iter=1000, **tsne_kwargs)
-        embeddings.append(("tsne", np.asarray(tsne.fit_transform(Z), dtype=np.float64)))
-    except Exception as exc:
-        LOG.warning("t-SNE failed: %s", exc)
+            from sklearn.manifold import TSNE
+
+            perplexity = float(min(30, max(5, Z.shape[0] // 10)))
+            tsne_kwargs = {
+                "n_components": 2,
+                "perplexity": perplexity,
+                "learning_rate": 200,
+                "random_state": random_state,
+                "init": "pca",
+            }
+            try:
+                tsne = TSNE(max_iter=1000, **tsne_kwargs)
+            except TypeError:
+                tsne = TSNE(n_iter=1000, **tsne_kwargs)
+            embeddings.append(("tsne", np.asarray(tsne.fit_transform(Z), dtype=np.float64)))
+        except Exception as exc:
+            LOG.warning("t-SNE failed: %s", exc)
 
     return embeddings
 
@@ -492,9 +498,10 @@ def _save_embedding(
 
     UMAP renders the whole dataset in one plot. t-SNE renders one zoomed-in
     plot per cluster found by the clustering step (axes cover every point in
-    that cluster); if no clusters exist it falls back to a single whole-dataset
-    plot. Points are a fixed size and colored by the combined anomaly score
-    from ``Mapper.anomaly`` when available.
+    that cluster); only when t-SNE was requested but clustering produced no
+    usable clusters does it fall back to a single whole-dataset plot. Points
+    are a fixed size and colored by the combined anomaly score from
+    ``Mapper.anomaly`` when available.
     """
     saved: List[str] = []
     embedding_df = _build_latent_dataframe(
@@ -959,9 +966,15 @@ def viz_unsupervised_latent(
                     saved_paths.append(str(dendrogram_saved))
 
         if emit_learned:
+            tsne_allowed = (
+                True
+                if not apply_tendency_gate
+                else bool(tendency_summary.get("gate_passed", True))
+            )
             for embedding_type, embedding in _fit_2d_embeddings(
                 Z,
                 random_state=random_state,
+                include_tsne=tsne_allowed,
             ):
                 saved_paths.extend(
                     _save_embedding(
@@ -1264,6 +1277,7 @@ def plot_mapper_latent(
     random_state: int = 42,
     color_by: str = "cluster",
     apply_tendency_gate: bool = True,
+    include_tsne: bool = True,
     tendency_summary: Optional[Dict[str, Any]] = None,
     hopkins_threshold: float = 0.55,
     tendency_sample_size: Optional[int] = None,
@@ -1280,7 +1294,9 @@ def plot_mapper_latent(
     already holds, so the plots land in the run's output folder at run end.
     ``anomaly_score`` is the per-sample combined anomaly score from
     ``Mapper.anomaly.run_anomaly_detection``; points are colored by it with a
-    colorbar.
+    colorbar. t-SNE plots (one per cluster) are emitted only when
+    ``include_tsne`` is True and the Hopkins tendency gate passes; UMAP is
+    always rendered.
     """
     import matplotlib
 
@@ -1310,9 +1326,11 @@ def plot_mapper_latent(
     )
 
     labels = cluster_labels
+    clustering_blocked_by_gate = False
     if labels is None:
         if apply_tendency_gate and not tendency.get("gate_passed", True):
             labels = np.full(len(Z), -1, dtype=int)
+            clustering_blocked_by_gate = True
         else:
             try:
                 labels, _ = _cluster_latent_embeddings(
@@ -1326,6 +1344,7 @@ def plot_mapper_latent(
             except Exception as exc:
                 LOG.warning("Clustering for latent plot failed: %s", exc)
                 labels = np.full(len(Z), -1, dtype=int)
+    include_tsne_effective = bool(include_tsne) and not clustering_blocked_by_gate
 
     saved_paths: List[str] = []
     safe_model_name = model_name.replace(" ", "_")
@@ -1360,6 +1379,7 @@ def plot_mapper_latent(
     for embedding_type, embedding in _fit_2d_embeddings(
         Z,
         random_state=random_state,
+        include_tsne=include_tsne_effective,
     ):
         saved_paths.extend(
             _save_embedding(

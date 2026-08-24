@@ -774,6 +774,10 @@ def run_mapper_workflow(
                 random_state=int(
                     visualization_config.get("random_state", spec.seed)
                 ),
+                include_tsne=bool(
+                    tendency_decision is not None
+                    and bool(tendency_decision.get("proceed_to_clustering", False))
+                ),
                 tendency_summary=tendency_report,
                 hopkins_threshold=float(
                     tendency_config.get("hopkins_threshold", 0.55)
