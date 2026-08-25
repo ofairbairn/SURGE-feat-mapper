@@ -71,6 +71,10 @@ class SurrogateWorkflowSpec:
     sample_rows: Optional[int] = None
     analyzer: Dict[str, Any] = field(default_factory=dict)
     metadata_overrides: Dict[str, Any] = field(default_factory=dict)
+    # Mapper input-layout hints. ``auto`` uses metadata and conservative
+    # column-name inference; image data additionally needs (C, H, W).
+    data_type: str = "auto"  # "auto", "image", or "tabular"
+    input_shape: Optional[tuple] = None
     batch_dir_mode_step: Optional[int] = None
     batch_dir_psi_step: Optional[int] = None
     batch_dir_target_shape: Optional[tuple] = None  # (n_modes, n_psi) for fixed resolution
@@ -125,6 +129,20 @@ class SurrogateWorkflowSpec:
                 "workflow_type must be either 'surrogate' or 'mapper'; "
                 f"got {self.workflow_type!r}"
             )
+
+        self.data_type = str(self.data_type).strip().lower()
+        if self.data_type not in {"auto", "image", "tabular"}:
+            raise ValueError(
+                "data_type must be one of: auto, image, tabular; "
+                f"got {self.data_type!r}"
+            )
+        if self.input_shape is not None:
+            shape = tuple(int(value) for value in self.input_shape)
+            if len(shape) not in {2, 3} or any(value <= 0 for value in shape):
+                raise ValueError(
+                    "input_shape must contain positive (H, W) or (C, H, W) dimensions"
+                )
+            self.input_shape = shape
 
         coerced_models: List[ModelConfig] = []
         for m in self.models:

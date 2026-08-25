@@ -243,6 +243,18 @@ except Exception:
     pass
 
 try:
+    from .adapters.conv_unsupervised_vae import ConvUnsupervisedVAEAdapter
+
+    if PYTORCH_AVAILABLE:
+        register_model(
+            ConvUnsupervisedVAEAdapter,
+            key='pytorch.conv_unsupervised_vae',
+            aliases=['conv_unsupervised_vae', 'conv_vae'],
+        )
+except Exception:
+    pass
+
+try:
     from .adapters.pca import PCAAdapter
 
     register_model(PCAAdapter, key='sklearn.pca', aliases=['pca'])

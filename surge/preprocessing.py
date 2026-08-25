@@ -33,6 +33,8 @@ OUTPUT_PREFIXES = (
     "out",
     "output",
     "target",
+    "label",
+    "digit",
     "gamma",
     "beta",
     "profile",

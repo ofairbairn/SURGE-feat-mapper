@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.base import clone
 from sklearn.preprocessing import RobustScaler
 
-from Mapper.data_preprocess.data_scaler import DataScaler
+from Mapper.data_preprocess.data_scaler import DataScaler, ImageDataScaler
 
 
 def test_data_scaler_uses_median_and_interquartile_range() -> None:
@@ -35,6 +35,23 @@ def test_transform_does_not_refit_on_mapper_data() -> None:
     np.testing.assert_allclose(scaler.scale_, training_scale)
     np.testing.assert_allclose(
         transformed, (mapper_data - training_center) / training_scale
+    )
+
+
+def test_image_data_scaler_preserves_nonnegative_pixel_range() -> None:
+    training = np.array([[0.0, 64.0], [128.0, 255.0]], dtype=np.float32)
+    scaler = ImageDataScaler()
+
+    transformed = scaler.fit_transform(training)
+
+    assert scaler.method_ == "divide_255"
+    assert transformed.dtype == np.float32
+    assert float(transformed.min()) == 0.0
+    assert float(transformed.max()) == 1.0
+    np.testing.assert_allclose(scaler.inverse_transform(transformed), training)
+    np.testing.assert_allclose(
+        scaler.transform(np.array([[-5.0, 300.0]], dtype=np.float32)),
+        np.array([[0.0, 1.0]], dtype=np.float32),
     )
 
 

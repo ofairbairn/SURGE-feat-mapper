@@ -2,6 +2,10 @@ workflow:
   workflow_type: mapper
   dataset_path: "C:\\Users\\Bipo1\\Downloads\\Kaggle Chinese MNIST Data\\chinese_mnist_flattened.csv"
   dataset_format: csv
+  data_type: image
+  input_shape: [1, 64, 64]
+  metadata_overrides:
+    outputs: [value]
   task_type: unsupervised
   test_fraction: 0.2
   val_fraction: 0.1
@@ -54,21 +58,23 @@ workflow:
         n_components: 8
         svd_solver: auto
         whiten: true
-    - key: pytorch.autoencoder
-      name: Autoencoder
+    - key: pytorch.conv_autoencoder
+      name: Convolutional Autoencoder
       params:
+        input_shape: [1, 64, 64]
         latent_dim: 8
-        hidden_dims: [128, 64]
+        channels: [32, 64, 128]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001
         device: cpu
         verbose: true
-    - key: pytorch.unsupervised_vae
-      name: VAE
+    - key: pytorch.conv_unsupervised_vae
+      name: Convolutional VAE
       params:
+        input_shape: [1, 64, 64]
         latent_dim: 8
-        hidden_dims: [128, 64]
+        channels: [32, 64, 128]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,7 +29,7 @@ from surge.utils import posix_str
 from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
 
 from .cluster import run_cluster_analysis
-from .data_preprocess import DataScaler, analyze_missingness
+from .data_preprocess import DataScaler, ImageDataScaler, analyze_missingness
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
 from .anomaly.anomaly import run_anomaly_detection
 from .stability.stability import run_cluster_stability
@@ -41,17 +42,45 @@ _LADDER_MODEL_KEYS = {
     "ae": "pytorch.autoencoder",
     "vae": "pytorch.unsupervised_vae",
 }
+_CONV_LADDER_MODEL_KEYS = {
+    "ae": "pytorch.conv_autoencoder",
+    "vae": "pytorch.conv_unsupervised_vae",
+}
 _LADDER_ALIASES = {
     "pca": {"pca", "sklearn.pca"},
-    "ae": {"ae", "autoencoder", "pytorch.autoencoder"},
+    "ae": {
+        "ae",
+        "autoencoder",
+        "pytorch.autoencoder",
+        "conv_autoencoder",
+        "cae",
+        "pytorch.conv_autoencoder",
+    },
     "vae": {
         "vae",
         "unsupervised_vae",
         "pytorch.unsupervised_vae",
         "owen_vae",
         "pytorch.owen_vae",
+        "conv_unsupervised_vae",
+        "conv_vae",
+        "pytorch.conv_unsupervised_vae",
     },
 }
+_GENERIC_RUNG_ALIASES = {
+    "pca": {"pca"},
+    "ae": {"ae", "autoencoder"},
+    "vae": {"vae", "unsupervised_vae"},
+}
+_CONV_MODEL_ALIASES = {
+    "conv_autoencoder",
+    "cae",
+    "pytorch.conv_autoencoder",
+    "conv_unsupervised_vae",
+    "conv_vae",
+    "pytorch.conv_unsupervised_vae",
+}
+_PIXEL_COLUMN_PATTERN = re.compile(r"^pixel[_-]?(\d+)$", re.IGNORECASE)
 _DEFAULT_MAX_RECON_RMSE = 0.10
 
 
@@ -93,6 +122,17 @@ def run_mapper_workflow(
     )
     if dataset.df is None or not dataset.input_columns:
         raise ValueError("Mapper requires a non-empty dataset with input features.")
+    input_layout = _resolve_mapper_input_layout(dataset, spec)
+    ordered_columns = input_layout.pop("ordered_input_columns", None)
+    if ordered_columns is not None:
+        dataset.input_columns = list(ordered_columns)
+    print(
+        "[Mapper input] "
+        f"data_type={input_layout['data_type']}, "
+        f"input_shape={input_layout.get('input_shape')}, "
+        f"source={input_layout['source']}",
+        flush=True,
+    )
 
     # Reuse SURGE's deterministic split logic, but deliberately disable its
     # StandardScaler: Mapper owns preprocessing and uses DataScaler below.
@@ -115,7 +155,11 @@ def run_mapper_workflow(
     engine.prepare()
     raw = engine.get_raw_splits()
     ###DATA LOADER/SCALER MODULE###
-    scaler = DataScaler()
+    scaler = (
+        ImageDataScaler()
+        if input_layout["data_type"] == "image"
+        else DataScaler()
+    )
     X_train = scaler.fit_transform(raw.X_train)
     X_val = scaler.transform(raw.X_val)
     X_test = scaler.transform(raw.X_test) if raw.X_test is not None else None
@@ -170,7 +214,7 @@ def run_mapper_workflow(
             little_p = mcar_result.get("little_pvalue")
             print(
                 "[Mapper Preprocess] "
-                f"status=complete, robust_scaling=done, "
+                f"status=complete, scaling={_scaling_summary(scaler)['method']}, "
                 f"missing_values_detected="
                 f"{preprocessing_report.get('missing_values_detected')}, "
                 f"completeness="
@@ -202,7 +246,11 @@ def run_mapper_workflow(
     selected_rung = None
     selected_quality_sufficient = False
     for rung in _LADDER_RUNGS:
-        model_key, model_name, model_params = _resolve_ladder_model(spec, rung)
+        model_key, model_name, model_params = _resolve_ladder_model(
+            spec,
+            rung,
+            input_layout=input_layout,
+        )
         adapter = MODEL_REGISTRY.create(model_key, **model_params)
         if hasattr(adapter, "prepare_for_fit"):
             adapter.prepare_for_fit(
@@ -818,6 +866,7 @@ def run_mapper_workflow(
 
     metrics_payload: Dict[str, Any] = {
         "representation_ladder": ladder_results,
+        "input_layout": input_layout,
     }
     if preprocessing_report is not None:
         metrics_payload["preprocessing"] = preprocessing_report
@@ -848,15 +897,10 @@ def run_mapper_workflow(
         "workflow_type": "mapper",
         "status": status,
         "dataset": dataset.summary(),
+        "input_layout": input_layout,
         "input_columns": list(dataset.input_columns),
         "split_sizes": split_sizes,
-        "scaling": {
-            "method": "robust",
-            "fit_split": "train",
-            "with_centering": scaler.with_centering,
-            "with_scaling": scaler.with_scaling,
-            "quantile_range": list(scaler.quantile_range),
-        },
+        "scaling": _scaling_summary(scaler),
         "preprocessing": preprocessing_report,
         "representation_ladder": {
             "order": list(_LADDER_RUNGS),
@@ -979,7 +1023,14 @@ def _compute_reconstruction_payload(
         except Exception:
             return None
         if y_pred.shape != y_true.shape:
-            return None
+            same_samples = y_pred.ndim >= 1 and y_pred.shape[0] == y_true.shape[0]
+            same_sample_size = (
+                same_samples
+                and int(np.prod(y_pred.shape[1:])) == int(np.prod(y_true.shape[1:]))
+            )
+            if not same_sample_size:
+                return None
+            y_pred = y_pred.reshape(y_true.shape)
         y_true_parts.append(y_true)
         y_pred_parts.append(y_pred)
         index_parts.append(np.asarray(idx))
@@ -1112,9 +1163,170 @@ def _mapper_status_after_clustering(
     return "clustering_complete"
 
 
+def _pixel_column_order(columns: Any) -> Optional[list[str]]:
+    """Return contiguous pixel columns in numeric rather than lexical order."""
+    indexed: list[tuple[int, str]] = []
+    for column in columns:
+        match = _PIXEL_COLUMN_PATTERN.fullmatch(str(column))
+        if match is None:
+            return None
+        indexed.append((int(match.group(1)), str(column)))
+    if not indexed:
+        return None
+    indexed.sort(key=lambda item: item[0])
+    if [index for index, _ in indexed] != list(range(len(indexed))):
+        return None
+    return [column for _, column in indexed]
+
+
+def _normalize_image_shape(value: Any) -> Optional[Tuple[int, int, int]]:
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("input_shape must be a list or tuple")
+    shape = tuple(int(dimension) for dimension in value)
+    if len(shape) == 2:
+        shape = (1, *shape)
+    if len(shape) != 3 or any(dimension <= 0 for dimension in shape):
+        raise ValueError("Image input_shape must be positive (H, W) or (C, H, W)")
+    return shape
+
+
+def _configured_conv_shape(spec: SurrogateWorkflowSpec) -> Optional[Tuple[int, int, int]]:
+    for model in spec.models:
+        if model.key.strip().lower() not in _CONV_MODEL_ALIASES:
+            continue
+        shape = _normalize_image_shape(model.params.get("input_shape"))
+        if shape is not None:
+            return shape
+    return None
+
+
+def _resolve_mapper_input_layout(
+    dataset: SurrogateDataset,
+    spec: SurrogateWorkflowSpec,
+) -> Dict[str, Any]:
+    """Resolve Mapper's semantic sample layout before scaling/model selection."""
+    metadata = dict(dataset.metadata or {})
+    overrides = dict(spec.metadata_overrides or {})
+    raw_data_type = spec.data_type
+    source = "workflow.data_type"
+    if raw_data_type == "auto":
+        raw_data_type = str(
+            overrides.get(
+                "data_type",
+                overrides.get(
+                    "modality",
+                    metadata.get("data_type", metadata.get("modality", "auto")),
+                ),
+            )
+        ).strip().lower()
+        source = (
+            "metadata_overrides"
+            if "data_type" in overrides or "modality" in overrides
+            else "metadata" if "data_type" in metadata or "modality" in metadata
+            else "auto"
+        )
+    aliases = {"images": "image", "vision": "image", "table": "tabular"}
+    data_type = aliases.get(raw_data_type, raw_data_type)
+    if data_type not in {"auto", "image", "tabular"}:
+        raise ValueError(
+            "Mapper data_type/modality must be one of: auto, image, tabular"
+        )
+
+    raw_shape = spec.input_shape
+    shape_source = "workflow.input_shape"
+    if raw_shape is None:
+        for container_name, container in (
+            ("metadata_overrides", overrides),
+            ("metadata", metadata),
+        ):
+            raw_shape = container.get("input_shape", container.get("sample_shape"))
+            if raw_shape is not None:
+                shape_source = container_name
+                break
+    configured_shape = _configured_conv_shape(spec)
+    if raw_shape is None and configured_shape is not None:
+        raw_shape = configured_shape
+        shape_source = "configured_conv_adapter"
+    input_shape = _normalize_image_shape(raw_shape)
+
+    pixel_columns = _pixel_column_order(dataset.input_columns)
+    n_features = len(dataset.input_columns)
+    if data_type == "auto" and (input_shape is not None or configured_shape is not None):
+        data_type = "image"
+        source = shape_source
+    if data_type == "auto" and pixel_columns is not None:
+        side = int(np.sqrt(n_features))
+        if side * side == n_features:
+            data_type = "image"
+            input_shape = (1, side, side)
+            source = "contiguous_pixel_columns"
+            shape_source = source
+    if data_type == "auto":
+        data_type = "tabular"
+        source = "default_tabular"
+
+    configured_conv = any(
+        model.key.strip().lower() in _CONV_MODEL_ALIASES for model in spec.models
+    )
+    if data_type == "tabular" and configured_conv:
+        raise ValueError(
+            "A convolutional Mapper adapter conflicts with data_type='tabular'"
+        )
+    if data_type == "image" and input_shape is None:
+        side = int(np.sqrt(n_features))
+        if side * side == n_features:
+            input_shape = (1, side, side)
+            shape_source = "square_grayscale_feature_count"
+        else:
+            raise ValueError(
+                "Image data requires input_shape=(C, H, W); it cannot be inferred "
+                f"from {n_features} input features"
+            )
+    if data_type == "image":
+        assert input_shape is not None
+        expected_features = int(np.prod(input_shape))
+        if expected_features != n_features:
+            raise ValueError(
+                f"input_shape={input_shape} contains {expected_features} values, "
+                f"but Mapper selected {n_features} input columns"
+            )
+
+    return {
+        "data_type": data_type,
+        "input_shape": list(input_shape) if input_shape is not None else None,
+        "flattened_order": "CHW" if data_type == "image" else None,
+        "source": source,
+        "shape_source": shape_source if input_shape is not None else None,
+        "ordered_input_columns": pixel_columns if data_type == "image" else None,
+    }
+
+
+def _scaling_summary(scaler: Any) -> Dict[str, Any]:
+    if isinstance(scaler, ImageDataScaler):
+        return {
+            "method": scaler.method_,
+            "fit_split": "train",
+            "data_min": scaler.data_min_,
+            "data_max": scaler.data_max_,
+            "clip": scaler.clip,
+            "output_range": [0.0, 1.0],
+        }
+    return {
+        "method": "robust",
+        "fit_split": "train",
+        "with_centering": scaler.with_centering,
+        "with_scaling": scaler.with_scaling,
+        "quantile_range": list(scaler.quantile_range),
+    }
+
+
 def _resolve_ladder_model(
     spec: SurrogateWorkflowSpec,
     rung: str,
+    *,
+    input_layout: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[str, str, Dict[str, Any]]:
     """Resolve a rung's registry key and optional YAML model parameters."""
     configured: Optional[ModelConfig] = None
@@ -1123,14 +1335,31 @@ def _resolve_ladder_model(
             configured = model
             break
 
-    model_key = _LADDER_MODEL_KEYS[rung]
+    image_input = bool(input_layout and input_layout.get("data_type") == "image")
+    model_key = (
+        _CONV_LADDER_MODEL_KEYS[rung]
+        if image_input and rung in _CONV_LADDER_MODEL_KEYS
+        else _LADDER_MODEL_KEYS[rung]
+    )
     model_name = rung.upper()
     params: Dict[str, Any] = {}
     if configured is not None:
-        if configured.key in MODEL_REGISTRY:
+        configured_key = configured.key.strip().lower()
+        if (
+            configured_key not in _GENERIC_RUNG_ALIASES[rung]
+            and configured.key in MODEL_REGISTRY
+        ):
             model_key = configured.key
         model_name = configured.name or model_name
         params.update(configured.params)
+    if model_key in _CONV_MODEL_ALIASES:
+        detected_shape = input_layout.get("input_shape") if input_layout else None
+        params.setdefault("input_shape", detected_shape)
+        if params["input_shape"] is None:
+            raise ValueError(
+                f"Mapper model {model_key!r} requires input_shape=(C, H, W)"
+            )
+        params["input_shape"] = _normalize_image_shape(params["input_shape"])
     params.setdefault("random_state", spec.seed)
     return model_key, model_name, params
 

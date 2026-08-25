@@ -7,8 +7,9 @@ validation and test data from leaking into the preprocessing statistics.
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
+import numpy as np
 from sklearn.preprocessing import RobustScaler
 
 
@@ -59,4 +60,69 @@ class DataScaler(RobustScaler):
         )
 
 
-__all__ = ["DataScaler"]
+class ImageDataScaler:
+    """Scale flattened image intensities without centering them below zero.
+
+    Common ``[0, 1]`` inputs are left unchanged and common byte images are
+    divided by 255. Other numeric ranges use a global train-only min/max
+    transform. Validation and test values are clipped to the decoder-friendly
+    ``[0, 1]`` interval.
+    """
+
+    def __init__(self, *, clip: bool = True) -> None:
+        self.clip = bool(clip)
+        self.data_min_: Optional[float] = None
+        self.data_max_: Optional[float] = None
+        self.offset_: Optional[float] = None
+        self.scale_: Optional[float] = None
+        self.method_: Optional[str] = None
+
+    def fit(self, X, y=None) -> "ImageDataScaler":
+        del y
+        array = np.asarray(X, dtype=np.float32)
+        if array.size == 0:
+            raise ValueError("Cannot fit ImageDataScaler on an empty array")
+        if not np.isfinite(array).all():
+            raise ValueError("ImageDataScaler requires finite training values")
+        self.data_min_ = float(np.min(array))
+        self.data_max_ = float(np.max(array))
+        tolerance = 1e-6
+        if self.data_min_ >= -tolerance and self.data_max_ <= 1.0 + tolerance:
+            self.offset_ = 0.0
+            self.scale_ = 1.0
+            self.method_ = "identity_0_1"
+        elif self.data_min_ >= -tolerance and self.data_max_ <= 255.0 + tolerance:
+            self.offset_ = 0.0
+            self.scale_ = 255.0
+            self.method_ = "divide_255"
+        else:
+            self.offset_ = self.data_min_
+            value_range = self.data_max_ - self.data_min_
+            self.scale_ = value_range if value_range > 0.0 else 1.0
+            self.method_ = "global_train_minmax"
+        return self
+
+    def _check_fitted(self) -> Tuple[float, float]:
+        if self.offset_ is None or self.scale_ is None:
+            raise ValueError("ImageDataScaler must be fitted before transformation")
+        return self.offset_, self.scale_
+
+    def transform(self, X) -> np.ndarray:
+        offset, scale = self._check_fitted()
+        transformed = (np.asarray(X, dtype=np.float32) - offset) / scale
+        if self.clip:
+            transformed = np.clip(transformed, 0.0, 1.0)
+        return transformed.astype(np.float32, copy=False)
+
+    def fit_transform(self, X, y=None) -> np.ndarray:
+        return self.fit(X, y).transform(X)
+
+    def inverse_transform(self, X) -> np.ndarray:
+        offset, scale = self._check_fitted()
+        return (np.asarray(X, dtype=np.float32) * scale + offset).astype(
+            np.float32,
+            copy=False,
+        )
+
+
+__all__ = ["DataScaler", "ImageDataScaler"]

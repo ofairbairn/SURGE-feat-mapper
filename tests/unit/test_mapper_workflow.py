@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from Mapper.data_preprocess import DataScaler
+from Mapper.data_preprocess import DataScaler, ImageDataScaler
 from surge.workflow.run import run_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 
@@ -23,6 +23,8 @@ def test_workflow_type_defaults_to_surrogate_and_validates() -> None:
     assert mapper_spec.workflow_type == "mapper"
     with pytest.raises(ValueError, match="workflow_type"):
         SurrogateWorkflowSpec(dataset_path="unused.csv", workflow_type="unknown")
+    with pytest.raises(ValueError, match="data_type"):
+        SurrogateWorkflowSpec(dataset_path="unused.csv", data_type="audio")
 
 
 def test_mapper_workflow_robustly_scales_from_training_split(
@@ -193,6 +195,139 @@ class _FakeLadderAdapter:
 
     def save(self, path: Any) -> None:
         Path(path).write_text(self.rung, encoding="utf-8")
+
+
+def test_mapper_image_layout_routes_ae_and_vae_to_convolutional_adapters() -> None:
+    from Mapper.pipeline import _resolve_ladder_model
+
+    spec = SurrogateWorkflowSpec(
+        dataset_path="unused.csv",
+        workflow_type="mapper",
+        data_type="image",
+        input_shape=(1, 28, 28),
+    )
+    layout = {"data_type": "image", "input_shape": [1, 28, 28]}
+
+    ae_key, _, ae_params = _resolve_ladder_model(
+        spec, "ae", input_layout=layout
+    )
+    vae_key, _, vae_params = _resolve_ladder_model(
+        spec, "vae", input_layout=layout
+    )
+
+    assert ae_key == "pytorch.conv_autoencoder"
+    assert vae_key == "pytorch.conv_unsupervised_vae"
+    assert ae_params["input_shape"] == (1, 28, 28)
+    assert vae_params["input_shape"] == (1, 28, 28)
+
+
+def test_mapper_auto_detects_contiguous_square_pixel_columns() -> None:
+    from Mapper.pipeline import _resolve_mapper_input_layout
+    from surge.dataset import SurrogateDataset
+
+    columns = [f"pixel_{index}" for index in range(16)]
+    frame = pd.DataFrame(np.zeros((2, 16)), columns=columns)
+    dataset = SurrogateDataset.from_dataframe(
+        frame,
+        input_columns=columns,
+        output_columns=columns,
+    )
+    # Reproduce the lexical ordering produced by the general tabular analyzer.
+    dataset.input_columns = sorted(dataset.input_columns)
+    spec = SurrogateWorkflowSpec(
+        dataset_path="unused.csv",
+        workflow_type="mapper",
+    )
+
+    layout = _resolve_mapper_input_layout(dataset, spec)
+
+    assert layout["data_type"] == "image"
+    assert layout["input_shape"] == [1, 4, 4]
+    assert layout["source"] == "contiguous_pixel_columns"
+    assert layout["ordered_input_columns"] == columns
+
+
+def test_mapper_reconstruction_payload_flattens_cnn_output() -> None:
+    from Mapper.pipeline import _compute_reconstruction_payload
+
+    class ImageAdapter:
+        def reconstruct(self, X: Any) -> np.ndarray:
+            return np.asarray(X).reshape(-1, 1, 2, 2)
+
+    X_train = np.arange(8, dtype=np.float32).reshape(2, 4)
+    X_val = np.arange(4, dtype=np.float32).reshape(1, 4)
+    payload = _compute_reconstruction_payload(
+        ImageAdapter(),
+        X_train,
+        X_val,
+        None,
+        np.array([1, 0]),
+        np.array([2]),
+        None,
+    )
+
+    assert payload is not None
+    assert payload["y_pred"].shape == (3, 4)
+    np.testing.assert_allclose(payload["recon_error"], np.zeros(3))
+
+
+def test_mapper_image_workflow_uses_image_scaling_and_numeric_pixel_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from Mapper import pipeline
+
+    rng = np.random.default_rng(29)
+    pixels = rng.integers(0, 256, size=(30, 16), dtype=np.int32)
+    frame = pd.DataFrame(pixels, columns=[f"pixel_{index}" for index in range(16)])
+    frame["label"] = rng.integers(0, 4, size=len(frame))
+    dataset_path = tmp_path / "image_mapper.csv"
+    frame.to_csv(dataset_path, index=False)
+    errors = {"pca": 0.20, "ae": 0.05}
+    rung_by_key = {
+        "sklearn.pca": "pca",
+        "pytorch.conv_autoencoder": "ae",
+        "pytorch.conv_unsupervised_vae": "vae",
+    }
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def create_adapter(model_key: str, **kwargs: Any) -> _FakeLadderAdapter:
+        rung = rung_by_key[model_key]
+        calls.append((model_key, kwargs))
+        return _FakeLadderAdapter(rung, errors.get(rung, 0.05))
+
+    monkeypatch.setattr(pipeline.MODEL_REGISTRY, "create", create_adapter)
+    spec = SurrogateWorkflowSpec(
+        dataset_path=dataset_path,
+        workflow_type="mapper",
+        data_type="image",
+        input_shape=(1, 4, 4),
+        test_fraction=0.2,
+        val_fraction=0.2,
+        output_dir=tmp_path,
+        run_tag="image_mapper",
+        unsupervised_ladder_thresholds={"max_recon_rmse": 0.10},
+        mapper_preprocess={"enabled": False},
+        mapper_diversity={"enabled": False},
+        mapper_tendency={"enabled": False},
+        mapper_anomaly={"enabled": False},
+        mapper_visualization={"enabled": False},
+    )
+
+    summary = pipeline.run_mapper_workflow(spec)
+
+    assert [key for key, _ in calls] == [
+        "sklearn.pca",
+        "pytorch.conv_autoencoder",
+    ]
+    assert calls[1][1]["input_shape"] == (1, 4, 4)
+    assert summary["input_layout"]["data_type"] == "image"
+    assert summary["input_layout"]["input_shape"] == [1, 4, 4]
+    assert summary["input_columns"] == [f"pixel_{index}" for index in range(16)]
+    assert "label" not in summary["input_columns"]
+    assert summary["scaling"]["method"] == "divide_255"
+    scaler = joblib.load(summary["artifacts"]["scaler"])
+    assert isinstance(scaler, ImageDataScaler)
 
 
 @pytest.mark.parametrize(
