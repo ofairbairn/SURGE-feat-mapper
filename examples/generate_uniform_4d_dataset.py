@@ -1,7 +1,7 @@
-"""Generate a synthetic 4D uniformly-distributed dataset for testing the
+"""Generate a synthetic 2D uniformly-distributed dataset for testing the
 Mapper clustering tendency step (Hopkins statistic gate).
-
-Saves the flattened (N, 4) dataset as a CSV to runs/generated_datasets/.
+One off script.
+Saves the flattened (N, 2) dataset as a CSV to runs/generated_datasets/.
 """
 
 from pathlib import Path
@@ -9,26 +9,26 @@ from pathlib import Path
 import numpy as np
 
 _REPO = Path(__file__).resolve().parent.parent
-OUTPUT_PATH = _REPO / "runs" / "generated_datasets" / "uniform_4d.csv"
+OUTPUT_PATH = _REPO / "runs" / "generated_datasets" / "uniform_2d.csv"
 
 rng = np.random.default_rng(seed=42)
 
 # Changing this tuple alters the number of data points
-# 5 * 5 * 5 * 8 = 1,000 total elements
-shape_4d = (5, 5, 5, 8)
+#10 * 10 = 100 data points
+shape_2d = (10, 10)
 
-# Generate the 4D dataset
-data_4d = rng.uniform(low=0.0, high=1.0, size=shape_4d)
+# Generate the 2D dataset
+data_2d = rng.normal(loc=2.0, scale=1.0, size=shape_2d)
 
 # Verify the size and shape
-print(f"Dataset shape: {data_4d.shape}")
-print(f"Total number of data points: {data_4d.size}")
+print(f"Dataset shape: {data_2d.shape}")
+print(f"Total number of data points: {data_2d.size}")
 
-# Flatten to a 2D table of points x 4 features for downstream use
-points = data_4d.reshape(-1, 4)
+# Flatten to a 2D table of points x 2 features for downstream use
+points = data_2d.reshape(-1, 2)
 
 OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-header = "x1,x2,x3,x4"
+header = "x1,x2"
 np.savetxt(OUTPUT_PATH, points, delimiter=",", header=header, comments="")
 
 print(f"Saved {points.shape[0]} points to {OUTPUT_PATH}")

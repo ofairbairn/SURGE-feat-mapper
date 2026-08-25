@@ -3,7 +3,7 @@ workflow:
   dataset_path: "C:\\Users\\Bipo1\\Downloads\\Kaggle Chinese MNIST Data\\chinese_mnist_flattened.csv"
   dataset_format: csv
   data_type: image
-  input_shape: [1, 64, 64]
+  input_shape: [1,64,64]
   metadata_overrides:
     outputs: [value]
   task_type: unsupervised
@@ -13,9 +13,9 @@ workflow:
   output_dir: runs
   # Mapper ladder gate keys (val RMSE).
   unsupervised_ladder_thresholds:
-    pca_max_recon_rmse: 0.20
-    ae_max_recon_rmse: 0.20
-    vae_max_recon_rmse: 0.20
+    pca_max_recon_rmse: 0.03
+    ae_max_recon_rmse: 0.03
+    vae_max_recon_rmse: 0.03
   mapper_diversity:
     enabled: true
     kernel: rbf
