@@ -12,6 +12,14 @@ from sklearn.linear_model import Ridge
 from .unsupervised_vae import reconstruction_metrics
 
 try:
+    from tqdm.auto import trange
+
+    TQDM_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    trange = None  # type: ignore[assignment]
+    TQDM_AVAILABLE = False
+
+try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
@@ -239,7 +247,18 @@ class ConvAutoencoderModel:
         self.target_head = None
         self.target_shape = None
         started = time.perf_counter()
-        for epoch in range(1, self.n_epochs + 1):
+        epoch_iterator = (
+            trange(
+                1,
+                self.n_epochs + 1,
+                desc="Convolutional Autoencoder Training",
+                unit="epoch",
+                disable=not self.verbose,
+            )
+            if self.verbose and TQDM_AVAILABLE
+            else range(1, self.n_epochs + 1)
+        )
+        for epoch in epoch_iterator:
             epoch_started = time.perf_counter()
             self.model.train()
             total_loss = 0.0
@@ -270,8 +289,18 @@ class ConvAutoencoderModel:
                         val_count += batch.size(0)
                 row["val_loss"] = val_total / max(val_count, 1)
             self.training_history.append(row)
-            if self.verbose and (epoch == 1 or epoch % 10 == 0 or epoch == self.n_epochs):
-                print(f"[ConvAutoencoder] epoch={epoch:03d} train_loss={row['train_loss']:.6f}")
+            if (
+                self.verbose
+                and TQDM_AVAILABLE
+                and hasattr(epoch_iterator, "set_postfix")
+            ):
+                progress_metrics = {
+                    "train_loss": f"{row['train_loss']:.6f}",
+                    "elapsed": f"{row['elapsed_seconds']:.1f}s",
+                }
+                if "val_loss" in row:
+                    progress_metrics["val_loss"] = f"{row['val_loss']:.6f}"
+                epoch_iterator.set_postfix(progress_metrics)
 
         if y is not None:
             y_array = np.asarray(y)
@@ -397,4 +426,9 @@ class ConvAutoencoderModel:
         self.is_fitted = bool(payload.get("is_fitted", False))
 
 
-__all__ = ["ConvAutoencoderModel", "TORCH_AVAILABLE", "_as_4d_array"]
+__all__ = [
+    "ConvAutoencoderModel",
+    "TORCH_AVAILABLE",
+    "TQDM_AVAILABLE",
+    "_as_4d_array",
+]

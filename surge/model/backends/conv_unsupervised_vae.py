@@ -11,10 +11,12 @@ from sklearn.linear_model import Ridge
 
 from .conv_autoencoder import (
     TORCH_AVAILABLE,
+    TQDM_AVAILABLE,
     ConvAutoencoderModel,
     ImageShape,
     _as_2d_targets,
     _as_4d_array,
+    trange,
 )
 from .unsupervised_vae import (
     _LOGVAR_MAX,
@@ -163,7 +165,18 @@ class ConvUnsupervisedVAEModel(ConvAutoencoderModel):
         self.target_head = None
         self.target_shape = None
         training_started = time.perf_counter()
-        for epoch in range(1, self.n_epochs + 1):
+        epoch_iterator = (
+            trange(
+                1,
+                self.n_epochs + 1,
+                desc="Convolutional VAE Training",
+                unit="epoch",
+                disable=not self.verbose,
+            )
+            if self.verbose and TQDM_AVAILABLE
+            else range(1, self.n_epochs + 1)
+        )
+        for epoch in epoch_iterator:
             epoch_started = time.perf_counter()
             model.train()
             totals = {"loss": 0.0, "recon": 0.0, "kl": 0.0}
@@ -239,14 +252,20 @@ class ConvUnsupervisedVAEModel(ConvAutoencoderModel):
                     }
                 )
             self.training_history.append(row)
-            if self.verbose and (
-                epoch == 1 or epoch % 10 == 0 or epoch == self.n_epochs
+            if (
+                self.verbose
+                and TQDM_AVAILABLE
+                and hasattr(epoch_iterator, "set_postfix")
             ):
-                print(
-                    f"[ConvUnsupervisedVAE] epoch={epoch:03d} "
-                    f"train_loss={row['train_loss']:.6f} "
-                    f"recon={row['train_recon']:.6f} kl={row['train_kl']:.6f}"
-                )
+                progress_metrics = {
+                    "train_loss": f"{row['train_loss']:.6f}",
+                    "recon": f"{row['train_recon']:.6f}",
+                    "kl": f"{row['train_kl']:.6f}",
+                    "elapsed": f"{row['elapsed_seconds']:.1f}s",
+                }
+                if "val_loss" in row:
+                    progress_metrics["val_loss"] = f"{row['val_loss']:.6f}"
+                epoch_iterator.set_postfix(progress_metrics)
 
         if y is not None:
             y_array = np.asarray(y)
@@ -362,5 +381,6 @@ class ConvUnsupervisedVAEModel(ConvAutoencoderModel):
 __all__ = [
     "ConvUnsupervisedVAEModel",
     "TORCH_AVAILABLE",
+    "TQDM_AVAILABLE",
     "_as_4d_array",
 ]
