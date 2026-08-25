@@ -231,6 +231,18 @@ except Exception:
     pass
 
 try:
+    from .adapters.conv_autoencoder import ConvAutoencoderAdapter
+
+    if PYTORCH_AVAILABLE:
+        register_model(
+            ConvAutoencoderAdapter,
+            key='pytorch.conv_autoencoder',
+            aliases=['conv_autoencoder', 'cae'],
+        )
+except Exception:
+    pass
+
+try:
     from .adapters.pca import PCAAdapter
 
     register_model(PCAAdapter, key='sklearn.pca', aliases=['pca'])
