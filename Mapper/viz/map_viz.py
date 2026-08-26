@@ -1596,6 +1596,14 @@ def plot_mapper_pca(
         pcs = np.arange(1, n_plot + 1, dtype=np.int64)
         cumulative = np.cumsum(evr)
         ax_var.bar(pcs, evr[:n_plot], alpha=0.75, label="Explained variance ratio")
+        for pc, ratio in zip(pcs, evr[:n_plot]):
+            ax_var.annotate(
+                f"{ratio * 100:.1f}%",
+                (pc, ratio),
+                va="bottom",
+                ha="center",
+                fontsize=8,
+            )
         ax_var.plot(
             pcs,
             cumulative[:n_plot],
@@ -1610,7 +1618,7 @@ def plot_mapper_pca(
         ax_var.set_ylabel("Variance ratio")
         ax_var.set_title("PCA explained variance")
         ax_var.grid(alpha=0.25)
-        ax_var.legend(loc="lower right")
+        ax_var.legend(loc="upper right")
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
