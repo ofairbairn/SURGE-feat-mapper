@@ -697,6 +697,23 @@ def test_pca_registered_and_round_trip(unsup_data, tmp_path):
     np.testing.assert_allclose(reconstruction, loaded.predict(X_te))
 
 
+def test_pca_supports_cumulative_explained_variance_threshold():
+    rng = np.random.default_rng(123)
+    dominant = rng.normal(size=(200, 2))
+    noise = rng.normal(scale=0.01, size=(200, 4))
+    X = np.column_stack((dominant, noise))
+
+    adapter = MODEL_REGISTRY.create(
+        "sklearn.pca", n_components=0.95, random_state=0
+    )
+    adapter.fit(X)
+
+    latent = adapter.encode(X)
+    assert latent.shape[1] == adapter.n_components_
+    assert 1 <= adapter.n_components_ < X.shape[1]
+    assert adapter._model.model.explained_variance_ratio_.sum() >= 0.95
+
+
 def test_autoencoder_registered():
     pytest.importorskip("torch")
     assert "pytorch.autoencoder" in MODEL_REGISTRY

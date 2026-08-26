@@ -67,7 +67,7 @@ workflow:
     - key: sklearn.pca
       name: PCA
       params:
-        n_components: 2
+        n_components: 0.95
         svd_solver: auto
         whiten: false
 

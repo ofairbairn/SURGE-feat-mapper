@@ -1475,7 +1475,13 @@ def plot_mapper_pca(
     split: str = "train_val_test",
     explained_variance_ratio: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
-    """Render a PCA diagnostic figure (scores + variance summary)."""
+    """Render PCA scores using PC1/PC2 plus a full variance summary.
+
+    ``Z`` may contain any dynamically selected number of components.  The
+    score panel deliberately uses only its first two columns; all retained
+    components remain available to Mapper and are included in the variance
+    panel.
+    """
     try:
         import matplotlib
 
@@ -1520,22 +1526,23 @@ def plot_mapper_pca(
         fig, ax_scatter = plt.subplots(figsize=(7, 6))
         ax_var = None
 
-    if Z.shape[1] >= 2:
-        x_vals = Z[:, 0]
-        y_vals = Z[:, 1]
+    plotted_scores = Z[:, :2]
+    if plotted_scores.shape[1] >= 2:
+        x_vals = plotted_scores[:, 0]
+        y_vals = plotted_scores[:, 1]
         ax_scatter.set_xlabel("PC1")
         ax_scatter.set_ylabel("PC2")
         ax_scatter.set_title(f"{_model_short_name(model_name)} {split} PCA scores")
     else:
         x_vals = np.arange(Z.shape[0], dtype=np.int64)
-        y_vals = Z[:, 0]
+        y_vals = plotted_scores[:, 0]
         ax_scatter.set_xlabel("Sample index")
         ax_scatter.set_ylabel("PC1")
         ax_scatter.set_title(
             f"{_model_short_name(model_name)} {split} PCA scores (single component)"
         )
     ax_scatter.scatter(x_vals, y_vals, s=18, alpha=0.75, edgecolors="none")
-    if Z.shape[1] >= 2:
+    if plotted_scores.shape[1] >= 2:
         x_min = float(np.nanmin(x_vals))
         x_max = float(np.nanmax(x_vals))
         y_min = float(np.nanmin(y_vals))
@@ -1615,6 +1622,7 @@ def plot_mapper_pca(
         "split": split,
         "n_samples": int(Z.shape[0]),
         "n_components": int(Z.shape[1]),
+        "plotted_components": int(plotted_scores.shape[1]),
         "saved_paths": [str(out_png)],
     }
 

@@ -42,7 +42,7 @@ class PCAAdapter(BaseModelAdapter):
 	resource_profile = _PCA_PROFILE
 	_INFO = _PCA_INFO
 	default_params: Dict[str, Any] = {
-		"n_components": 8,
+		"n_components": 0.95,
 		"max_components": 32,
 		"whiten": False,
 		"svd_solver": "auto",

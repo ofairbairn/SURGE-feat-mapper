@@ -13,9 +13,9 @@ workflow:
   # Zero thresholds force every rung to run so their validation RMSE values
   # can be compared; the smallest-RMSE rung supplies the final latent.
   unsupervised_ladder_thresholds:
-    pca_max_recon_rmse: 0.15
+    pca_max_recon_rmse: 0.10
     ae_max_recon_rmse: 0.15
-    vae_max_recon_rmse: 0.15
+    vae_max_recon_rmse: 0.20
 
   mapper_diversity:
     enabled: true
@@ -67,7 +67,7 @@ workflow:
     - key: sklearn.pca
       name: PCA
       params:
-        n_components: 2
+        n_components: 0.95
         svd_solver: auto
         whiten: false
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 import joblib
 import numpy as np
@@ -33,7 +33,7 @@ class PCAModel:
 	def __init__(
 		self,
 		*,
-		n_components: Optional[int] = 8,
+		n_components: Optional[Union[int, float]] = 0.95,
 		max_components: int = 32,
 		whiten: bool = False,
 		svd_solver: str = "auto",
@@ -41,11 +41,19 @@ class PCAModel:
 		verbose: bool = False,
 		**_: Any,
 	) -> None:
-		if n_components is not None and int(n_components) < 1:
-			raise ValueError("n_components must be at least 1 or None")
+		if isinstance(n_components, (float, np.floating)):
+			if not 0.0 < float(n_components) < 1.0:
+				raise ValueError(
+					"float n_components must be strictly between 0 and 1"
+				)
+			n_components = float(n_components)
+		elif n_components is not None:
+			if isinstance(n_components, (bool, np.bool_)) or int(n_components) < 1:
+				raise ValueError("integer n_components must be at least 1 or None")
+			n_components = int(n_components)
 		if int(max_components) < 1:
 			raise ValueError("max_components must be at least 1")
-		self.n_components = None if n_components is None else int(n_components)
+		self.n_components = n_components
 		self.max_components = int(max_components)
 		self.whiten = bool(whiten)
 		self.svd_solver = str(svd_solver)
@@ -62,8 +70,14 @@ class PCAModel:
 		upper = min(arr.shape[0], arr.shape[1], self.max_components)
 		if upper < 1:
 			raise ValueError(f"PCA requires at least one sample and feature, got {arr.shape}")
-		requested = upper if self.n_components is None else self.n_components
-		effective_components = min(requested, upper)
+		# scikit-learn interprets a float in (0, 1) as a cumulative explained-
+		# variance threshold and chooses the smallest sufficient component count.
+		# An integer remains capped for small datasets and by max_components.
+		if isinstance(self.n_components, float):
+			effective_components: Union[int, float] = self.n_components
+		else:
+			requested = upper if self.n_components is None else self.n_components
+			effective_components = min(requested, upper)
 		self.model = PCA(
 			n_components=effective_components,
 			whiten=self.whiten,

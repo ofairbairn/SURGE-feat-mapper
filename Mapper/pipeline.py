@@ -302,6 +302,12 @@ def run_mapper_workflow(
             "model_key": model_key,
             "model_name": model_name,
             "params": model_params,
+            "n_components_selected": (
+                int(adapter.n_components_)
+                if rung == "pca"
+                and getattr(adapter, "n_components_", None) is not None
+                else None
+            ),
             "fit_seconds": fit_seconds,
             "reconstruction_metrics": split_metrics,
             "quality_gate": gate,
