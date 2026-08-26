@@ -274,10 +274,10 @@ def run_mapper_workflow(
         rung_adapters[rung] = adapter
 
         split_metrics = {
-            "train": _serializable_metrics(adapter.reconstruction_metrics(X_train)),
-            "val": _serializable_metrics(adapter.reconstruction_metrics(X_val)),
+            "train": _add_rmse_mae_ratio(_serializable_metrics(adapter.reconstruction_metrics(X_train))),
+            "val": _add_rmse_mae_ratio(_serializable_metrics(adapter.reconstruction_metrics(X_val))),
             "test": (
-                _serializable_metrics(adapter.reconstruction_metrics(X_test))
+                _add_rmse_mae_ratio(_serializable_metrics(adapter.reconstruction_metrics(X_test)))
                 if X_test is not None
                 else None
             ),
@@ -1417,6 +1417,18 @@ def _serializable_metrics(
         str(key): None if value is None else float(value)
         for key, value in metrics.items()
     }
+
+
+def _add_rmse_mae_ratio(
+    metrics: Dict[str, Optional[float]],
+) -> Dict[str, Optional[float]]:
+    """Add rmse/mae to a split's metrics; reporting-only, unused by the gate."""
+    rmse = metrics.get("rmse")
+    mae = metrics.get("mae")
+    metrics["rmse/mae"] = (
+        float(rmse) / float(mae) if rmse is not None and mae else None
+    )
+    return metrics
 
 
 def _extract_pca_explained_variance_ratio(
