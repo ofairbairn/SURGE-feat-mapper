@@ -99,10 +99,16 @@ def reconstruction_metrics(
     diff = true_arr - recon_arr
     mse = float(np.mean(np.square(diff)))
     mae = float(np.mean(np.abs(diff)))
+    true_frob = float(np.linalg.norm(true_arr, ord="fro"))
+    # Reporting-only diagnostic; never used by the ladder gate (rmse/mse/mae only).
+    relative_frobenius_error = (
+        float(np.linalg.norm(diff, ord="fro") / true_frob) if true_frob > 0 else float("nan")
+    )
     metrics: Dict[str, Optional[float]] = {
         "mse": mse,
         "mae": mae,
         "rmse": float(np.sqrt(mse)),
+        "relative_frobenius_error": relative_frobenius_error,
         "ssim": None,
     }
 

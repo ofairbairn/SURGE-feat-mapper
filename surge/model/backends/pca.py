@@ -115,10 +115,16 @@ class PCAModel:
 		latent = self.encode(arr)
 		diff = arr - self.decode(latent)
 		mse = float(np.mean(np.square(diff)))
+		true_frob = float(np.linalg.norm(arr, ord="fro"))
+		# Reporting-only diagnostic; never used by the ladder gate (rmse/mse/mae only).
+		relative_frobenius_error = (
+			float(np.linalg.norm(diff, ord="fro") / true_frob) if true_frob > 0 else float("nan")
+		)
 		return {
 			"mse": mse,
 			"mae": float(np.mean(np.abs(diff))),
 			"rmse": float(np.sqrt(mse)),
+			"relative_frobenius_error": relative_frobenius_error,
 			"latent_var_mean": float(np.var(latent, axis=0).mean()),
 			"explained_variance_ratio_sum": float(
 				np.sum(self._require_model().explained_variance_ratio_)
