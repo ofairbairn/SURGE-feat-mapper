@@ -63,18 +63,18 @@ workflow:
       params:
         input_shape: [1, 64, 64]
         latent_dim: 8
-        channels: [32, 64, 128]
+        channels: [32, 16, 8]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001
         device: cpu
-        verbose: true
+        verbose: true #needed for progress bar, not flooding terminal output
     - key: pytorch.conv_unsupervised_vae
       name: Convolutional VAE
       params:
         input_shape: [1, 64, 64]
         latent_dim: 8
-        channels: [32, 64, 128]
+        channels: [32, 16, 8]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001
