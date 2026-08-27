@@ -1607,18 +1607,26 @@ def plot_mapper_pca(
         ax_var.plot(
             pcs,
             cumulative[:n_plot],
-            color="black",
+            color="red",
             marker="o",
             linewidth=1.5,
             markersize=3,
             label="Cumulative explained variance",
         )
+        for pc, cum in zip(pcs[1:], cumulative[1:n_plot]):
+            ax_var.annotate(
+                f"{cum * 100:.1f}%",
+                (pc, cum),
+                va="bottom",
+                ha="center",
+                fontsize=8,
+            )
         ax_var.set_ylim(0.0, 1.05)
         ax_var.set_xlabel("Principal component")
         ax_var.set_ylabel("Variance ratio")
         ax_var.set_title("PCA explained variance")
         ax_var.grid(alpha=0.25)
-        ax_var.legend(loc="upper right")
+        ax_var.legend(loc="upper left")
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
