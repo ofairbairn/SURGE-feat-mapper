@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from Mapper.data_preprocess import DataScaler, ImageDataScaler
+from Mapper.preprocess import DataScaler, ImageDataScaler
 from surge.workflow.run import run_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 

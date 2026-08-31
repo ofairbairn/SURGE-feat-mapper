@@ -29,7 +29,7 @@ from surge.utils import posix_str
 from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
 
 from .cluster import run_cluster_analysis
-from .data_preprocess import DataScaler, ImageDataScaler, analyze_missingness
+from .preprocess import DataScaler, ImageDataScaler, analyze_missingness
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
 from .anomaly.anomaly import run_anomaly_detection
 from .stability.stability import run_cluster_stability

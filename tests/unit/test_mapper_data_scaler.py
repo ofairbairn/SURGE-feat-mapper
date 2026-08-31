@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.base import clone
 from sklearn.preprocessing import RobustScaler
 
-from Mapper.data_preprocess.data_scaler import DataScaler, ImageDataScaler
+from Mapper.preprocess.data_scaler import DataScaler, ImageDataScaler
 
 
 def test_data_scaler_uses_median_and_interquartile_range() -> None:
