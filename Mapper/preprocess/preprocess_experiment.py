@@ -1,8 +1,7 @@
-"""Generate a synthetic 1D normally-distributed dataset for testing the
-Mapper clustering tendency step (Hopkins statistic gate).
-One off script.
-Saves the flattened (N, 1) dataset as a CSV to runs/generated_datasets/.
 """
+demonstration for using robust scaler
+"""
+
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
@@ -46,16 +45,18 @@ axes = axes.flatten()
 for ax, (title, scaler) in zip(axes, scalers.items()):
     # Scale data if scaler is provided
     X_scaled = X if scaler is None else scaler.fit_transform(X)
-
+    x1_scaled = X_scaled[:,0]
+    x2_scaled = X_scaled[:,1]
     # Plot KDE density curves for both features
-    sns.kdeplot(X_scaled[:, 0], ax=ax, label="x1 (Gaussian)", fill=True, alpha=0.3, color="tab:blue")
-    sns.kdeplot(X_scaled[:, 1], ax=ax, label="x2 (Exponential)", fill=True, alpha=0.3, color="tab:orange")
-    
+    sns.kdeplot(x1_scaled, ax=ax, label="x1 (Gaussian)", fill=True, alpha=0.3, color="tab:blue")
+    sns.kdeplot(x2_scaled, ax=ax, label="x2 (Exponential)", fill=True, alpha=0.3, color="tab:orange")
+    ax.axvline(np.percentile(x1_scaled, 25), color="green", linestyle="--", alpha=0.6, label="x1 IQR")
+    ax.axvline(np.percentile(x1_scaled, 75), color="green", linestyle="--", alpha=0.6)
+    ax.axvline(np.percentile(x2_scaled, 25), color="purple", linestyle="--", alpha=0.6, label="x2 IQR")
+    ax.axvline(np.percentile(x2_scaled, 75), color="purple", linestyle="--", alpha=0.6)
     ax.set_title(title, fontweight="bold")
     ax.set_xlabel("Value Range")
     ax.set_ylabel("Density")
-    # ax.axvline(x=np.percentile(x1, 25), color="green", linestyle="--", alpha=0.6)
-    # ax.axvline(x=np.percentile(x1, 75), color="green", linestyle="--", alpha=0.6)
     ax.axvline(x=0, color="red", linestyle="--", alpha=0.6)
     ax.legend(loc="upper right")
     ax.grid(True, linestyle=":", alpha=0.4)
@@ -65,3 +66,4 @@ plt.savefig(OUTPUT_PATH, dpi=300)
 plt.show()
 
 print(f"Saved comparison plot to: {OUTPUT_PATH}")
+#this is NOT ENOUGH, as a matter of fact may not even be good for supporting evidence.
