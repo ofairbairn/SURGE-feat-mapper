@@ -1,5 +1,6 @@
 """Tests for Mapper workflow selection and preprocessing orchestration."""
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -54,10 +55,12 @@ def test_mapper_workflow_robustly_scales_from_training_split(
     root = Path(summary["artifacts"]["root"])
 
     assert summary["workflow_type"] == "mapper"
+    assert "vat_parents" not in summary["cluster_tendency"]
     gate_passed = summary["cluster_tendency"]["gate_passed"]
     if gate_passed:
         assert summary["status"] == "clustering_complete"
         assert summary["clustering"]["status"] == "complete"
+        assert "labels" not in summary["clustering"]
         assert (root / "clustering" / "cluster_analysis.json").is_file()
     else:
         assert summary["status"] == "stopped_no_cluster_tendency"
@@ -93,6 +96,12 @@ def test_mapper_workflow_robustly_scales_from_training_split(
     assert (root / "tendency" / "vat_heatmap.png").is_file()
     assert (root / "tendency" / "ivat_heatmap.png").is_file()
     assert (root / "workflow_summary.json").is_file()
+    saved_summary = json.loads(
+        (root / "workflow_summary.json").read_text(encoding="utf-8")
+    )
+    assert "vat_parents" not in saved_summary["cluster_tendency"]
+    if saved_summary["clustering"] is not None:
+        assert "labels" not in saved_summary["clustering"]
 
 
 @pytest.mark.parametrize("gate_passed", [True, False])

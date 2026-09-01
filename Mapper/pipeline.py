@@ -486,7 +486,7 @@ def run_mapper_workflow(
         tendency_report = {
             key: value
             for key, value in tendency_summary.items()
-            if key not in {"vat_matrix", "ivat_matrix"}
+            if key not in {"vat_matrix", "ivat_matrix", "vat_parents"}
         }
         tendency_report["embedding"] = {
             "space": "selected_model_latent_z",
@@ -921,7 +921,15 @@ def run_mapper_workflow(
         "diversity": diversity_report,
         "cluster_tendency": tendency_report,
         "clustering_decision": tendency_decision,
-        "clustering": clustering_report,
+        "clustering": (
+            {
+                key: value
+                for key, value in clustering_report.items()
+                if key != "labels"
+            }
+            if clustering_report is not None
+            else None
+        ),
         "stability": stability_report,
         "anomaly": anomaly_report,
         "next_stage": (
