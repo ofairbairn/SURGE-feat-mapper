@@ -387,6 +387,10 @@ def run_mapper_workflow(
         raw.val_index,
         raw.test_index,
     )
+    data_split = np.full(len(all_indices), "validation", dtype=object)
+    data_split[np.isin(all_indices, raw.train_index)] = "train"
+    if raw.test_index is not None:
+        data_split[np.isin(all_indices, raw.test_index)] = "test"
     recon_payload = _compute_reconstruction_payload(
         selected_adapter,
         X_train,
@@ -813,12 +817,24 @@ def run_mapper_workflow(
                 sample_indices=all_indices,
                 output_dir=viz_dir,
                 model_name=f"mapper_{selected_rung}",
-                cluster_labels=None,
+                cluster_labels=(
+                    np.asarray(clustering_report["labels"]["hdbscan"])
+                    if clustering_report is not None
+                    and isinstance(clustering_report.get("labels"), dict)
+                    and "hdbscan" in clustering_report["labels"]
+                    else None
+                ),
                 recon_error=(
                     recon_payload["recon_error"] if recon_payload is not None else None
                 ),
                 anomaly_score=(
                     anomaly_arrays.get("combined_score")
+                    if anomaly_arrays is not None
+                    else None
+                ),
+                data_split=data_split,
+                marginal_vendi=(
+                    anomaly_arrays.get("marginal_vendi")
                     if anomaly_arrays is not None
                     else None
                 ),

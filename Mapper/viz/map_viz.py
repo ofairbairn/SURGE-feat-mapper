@@ -130,6 +130,8 @@ def _build_latent_dataframe(
     cluster: Optional[np.ndarray] = None,
     recon_error: Optional[np.ndarray] = None,
     anomaly_score: Optional[np.ndarray] = None,
+    data_split: Optional[np.ndarray] = None,
+    marginal_vendi: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
     df = pd.DataFrame(
         {
@@ -173,6 +175,18 @@ def _build_latent_dataframe(
     else:
         df["combined_anomaly_score"] = np.nan
 
+    if data_split is not None:
+        df["data_split"] = pd.Series(data_split, index=df.index, dtype="string")
+    else:
+        df["data_split"] = pd.NA
+
+    if marginal_vendi is not None:
+        df["marginal_vendi"] = np.asarray(
+            marginal_vendi, dtype=np.float64
+        ).reshape(-1)
+    else:
+        df["marginal_vendi"] = np.nan
+
     return df
 
 def _compute_axis_limits(
@@ -200,6 +214,8 @@ def _plot_latent_matplotlib(
     out_png: Path,
     color_by: str = "label",
     color_scores: Optional[np.ndarray] = None,
+    colorbar_label: str = "Combined anomaly score",
+    category_colors: Optional[Dict[str, str]] = None,
     axis_limits: Optional[Tuple[float, float, float, float]] = None,
 ) -> None:
     import matplotlib
@@ -210,35 +226,68 @@ def _plot_latent_matplotlib(
     score_values: Optional[np.ndarray] = None
     if color_scores is not None:
         candidate = np.asarray(color_scores, dtype=np.float64).reshape(-1)
-        if candidate.shape[0] == len(plot_df) and np.any(np.isfinite(candidate)):
+        if candidate.shape[0] == len(plot_df):
             score_values = candidate
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
     if score_values is not None:
-        im = ax.scatter(
-            plot_df["x"],
-            plot_df["y"],
-            s=18,
-            c=score_values,
-            cmap="viridis",
-            alpha=0.75,
-            edgecolors="none",
-        )
-        colorbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        colorbar.set_label("Combined anomaly score")
+        finite_scores = np.isfinite(score_values)
+        if np.any(~finite_scores):
+            ax.scatter(
+                plot_df.loc[~finite_scores, "x"],
+                plot_df.loc[~finite_scores, "y"],
+                s=18,
+                c="#bdbdbd",
+                alpha=0.55,
+                label="not available",
+                edgecolors="none",
+            )
+        if np.any(finite_scores):
+            im = ax.scatter(
+                plot_df.loc[finite_scores, "x"],
+                plot_df.loc[finite_scores, "y"],
+                s=18,
+                c=score_values[finite_scores],
+                cmap="viridis",
+                alpha=0.75,
+                edgecolors="none",
+            )
+            colorbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            colorbar.set_label(colorbar_label)
+        if np.any(~finite_scores):
+            ax.legend(loc="best")
     else:
         if color_by not in plot_df.columns or plot_df[color_by].isna().all():
             color_by = "cluster" if "cluster" in plot_df.columns and not plot_df["cluster"].isna().all() else "label"
 
         color_values = plot_df[color_by].astype("string").fillna("NA")
         unique_values = list(pd.unique(color_values))
-        cmap_name = "tab10" if len(unique_values) <= 10 else "tab20"
-        try:
-            cmap_obj = matplotlib.colormaps.get_cmap(cmap_name).resampled(max(len(unique_values), 1))
-        except AttributeError:
-            cmap_obj = plt.get_cmap(cmap_name, max(len(unique_values), 1))
-        color_map = {value: cmap_obj(i) for i, value in enumerate(unique_values)}
+        if category_colors is not None:
+            color_map = {
+                value: category_colors.get(str(value), "#808080")
+                for value in unique_values
+            }
+        else:
+            cmap_name = (
+                "tab10"
+                if len(unique_values) <= 10
+                else "tab20" if len(unique_values) <= 20 else "gist_rainbow"
+            )
+            try:
+                cmap_obj = matplotlib.colormaps.get_cmap(cmap_name).resampled(
+                    max(len(unique_values), 1)
+                )
+            except AttributeError:
+                cmap_obj = plt.get_cmap(cmap_name, max(len(unique_values), 1))
+            color_map = {
+                value: (
+                    "#808080"
+                    if color_by == "cluster" and str(value) == "-1"
+                    else cmap_obj(i)
+                )
+                for i, value in enumerate(unique_values)
+            }
 
         for value in unique_values:
             mask = color_values == value
@@ -353,6 +402,9 @@ def _plot_latent_interactive(
         "sample_id",
         "label",
         "cluster",
+        "data_split",
+        "combined_anomaly_score",
+        "marginal_vendi",
         "recon_error",
         "recon_error_norm",
         "embedding_type",
@@ -360,11 +412,26 @@ def _plot_latent_interactive(
     hover_cols = [col for col in hover_cols if col in plot_df.columns]
     hover_tooltips = []
     for col in hover_cols:
-        if col in {"recon_error", "recon_error_norm"}:
+        if col in {
+            "combined_anomaly_score",
+            "marginal_vendi",
+            "recon_error",
+            "recon_error_norm",
+        }:
             hover_tooltips.append((col, f"@{{{col}}}{{0.000}}"))
         else:
             hover_tooltips.append((col, f"@{{{col}}}"))
-    cmap_name = "Category10" if plot_df[color_by].nunique() <= 10 else "Category20"
+    n_categories = int(plot_df[color_by].nunique())
+    if n_categories <= 10:
+        cmap_name: Any = "Category10"
+    elif n_categories <= 20:
+        cmap_name = "Category20"
+    else:
+        from matplotlib import colormaps
+        from matplotlib.colors import to_hex
+
+        dynamic_cmap = colormaps.get_cmap("gist_rainbow").resampled(n_categories)
+        cmap_name = [to_hex(dynamic_cmap(i)) for i in range(n_categories)]
 
     points = hv.Points(plot_df, kdims=["x", "y"], vdims=hover_cols)
     if len(plot_df) > datashader_threshold:
@@ -480,6 +547,8 @@ def _save_embedding(
     cluster_labels: Optional[np.ndarray],
     recon_error: Optional[np.ndarray],
     anomaly_score: Optional[np.ndarray],
+    data_split: Optional[np.ndarray],
+    marginal_vendi: Optional[np.ndarray],
     model_name: str,
     split: str,
     embedding_type: str,
@@ -512,6 +581,8 @@ def _save_embedding(
         cluster=cluster_labels,
         recon_error=recon_error,
         anomaly_score=anomaly_score,
+        data_split=data_split,
+        marginal_vendi=marginal_vendi,
     )
     embedding_df["model_name"] = model_name
     embedding_df["split"] = split
@@ -609,6 +680,80 @@ def _save_embedding(
             )
             saved.append(str(cluster_png))
 
+    elif embedding_type == "umap":
+        umap_variants = (
+            (
+                "anomaly",
+                "Combined anomaly score",
+                None,
+                embedding_df["combined_anomaly_score"].to_numpy(dtype=np.float64),
+                "Combined anomaly score",
+                None,
+            ),
+            (
+                "cluster",
+                "Detected cluster",
+                "cluster",
+                None,
+                "",
+                None,
+            ),
+            (
+                "split",
+                "Dataset split",
+                "data_split",
+                None,
+                "",
+                {"train": "#1f77b4", "validation": "#d62728", "test": "#ffd700"},
+            ),
+            (
+                "marginal_vendi",
+                "Marginal Vendi contribution",
+                None,
+                embedding_df["marginal_vendi"].to_numpy(dtype=np.float64),
+                "Marginal Vendi contribution",
+                None,
+            ),
+        )
+        for (
+            suffix,
+            title_detail,
+            variant_color_by,
+            scores,
+            score_label,
+            palette,
+        ) in umap_variants:
+            png_path = output_dir / (
+                f"latent_{safe_model_name}_{split}_{embedding_type}_{suffix}.png"
+            )
+            _plot_latent_matplotlib(
+                embedding_df,
+                title=f"{title} - {title_detail}",
+                out_png=png_path,
+                color_by=variant_color_by or color_by,
+                color_scores=scores,
+                colorbar_label=score_label,
+                category_colors=palette,
+            )
+            saved.append(str(png_path))
+
+        # Keep one interactive Bokeh artifact for UMAP only, colored by the
+        # dynamically sized cluster palette. t-SNE never emits HTML.
+        if not embedding_df["cluster"].isna().all():
+            html_path = output_dir / (
+                f"latent_{safe_model_name}_{split}_{embedding_type}_cluster.html"
+            )
+            html_saved = _plot_latent_interactive(
+                embedding_df,
+                title=f"{title} - Detected cluster",
+                out_html=html_path,
+                color_by="cluster",
+                random_state=random_state,
+                hover_sample_frac=interactive_hover_sample_frac,
+                datashader_threshold=interactive_threshold,
+            )
+            if html_saved is not None:
+                saved.append(str(html_saved))
     else:
         png_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.png"
         _plot_latent_matplotlib(
@@ -619,22 +764,6 @@ def _save_embedding(
             color_scores=combined_scores,
         )
         saved.append(str(png_path))
-
-        if embedding_type == "umap":
-            html_path = output_dir / (
-                f"latent_{safe_model_name}_{split}_{embedding_type}.html"
-            )
-            html_saved = _plot_latent_interactive(
-                embedding_df,
-                title=title,
-                out_html=html_path,
-                color_by=color_by,
-                random_state=random_state,
-                hover_sample_frac=interactive_hover_sample_frac,
-                datashader_threshold=interactive_threshold,
-            )
-            if html_saved is not None:
-                saved.append(str(html_saved))
     return saved
 
 
@@ -974,6 +1103,8 @@ def viz_unsupervised_latent(
                         cluster_labels=cluster_labels,
                         recon_error=recon_error,
                         anomaly_score=None,
+                        data_split=np.full(len(valid_indices), split, dtype=object),
+                        marginal_vendi=None,
                         model_name=model_name,
                         split=split,
                         embedding_type=embedding_type,
@@ -1260,6 +1391,8 @@ def plot_mapper_latent(
     cluster_labels: Optional[np.ndarray] = None,
     recon_error: Optional[np.ndarray] = None,
     anomaly_score: Optional[np.ndarray] = None,
+    data_split: Optional[np.ndarray] = None,
+    marginal_vendi: Optional[np.ndarray] = None,
     cluster_method: str = "hdbscan",
     hdbscan_min_cluster_size: int = 20,
     hdbscan_min_samples: Optional[int] = None,
@@ -1283,7 +1416,9 @@ def plot_mapper_latent(
     already holds, so the plots land in the run's output folder at run end.
     ``anomaly_score`` is the per-sample combined anomaly score from
     ``Mapper.anomaly.run_anomaly_detection``; points are colored by it with a
-    colorbar. t-SNE plots (one per cluster) are emitted only when
+    colorbar. UMAP is rendered from one shared projection with anomaly,
+    cluster, dataset-split, and marginal-Vendi colorings. t-SNE plots (one per
+    cluster) are emitted only when
     ``include_tsne`` is True and the Hopkins tendency gate passes; UMAP is
     always rendered.
     """
@@ -1303,6 +1438,30 @@ def plot_mapper_latent(
         else:
             LOG.warning(
                 "Anomaly score length %s does not match latent rows %s; ignoring.",
+                int(candidate.shape[0]),
+                int(Z.shape[0]),
+            )
+
+    split_values: Optional[np.ndarray] = np.full(len(Z), split, dtype=object)
+    if data_split is not None:
+        candidate = np.asarray(data_split, dtype=object).reshape(-1)
+        if candidate.shape[0] == Z.shape[0]:
+            split_values = candidate
+        else:
+            LOG.warning(
+                "Data-split label count %s does not match latent rows %s; ignoring.",
+                int(candidate.shape[0]),
+                int(Z.shape[0]),
+            )
+
+    marginal_vendi_values: Optional[np.ndarray] = None
+    if marginal_vendi is not None:
+        candidate = np.asarray(marginal_vendi, dtype=np.float64).reshape(-1)
+        if candidate.shape[0] == Z.shape[0]:
+            marginal_vendi_values = candidate
+        else:
+            LOG.warning(
+                "Marginal Vendi count %s does not match latent rows %s; ignoring.",
                 int(candidate.shape[0]),
                 int(Z.shape[0]),
             )
@@ -1379,6 +1538,8 @@ def plot_mapper_latent(
                 cluster_labels=labels,
                 recon_error=recon_error,
                 anomaly_score=anomaly_scores,
+                data_split=split_values,
+                marginal_vendi=marginal_vendi_values,
                 model_name=model_name,
                 split=split,
                 embedding_type=embedding_type,
