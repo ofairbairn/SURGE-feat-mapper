@@ -56,19 +56,24 @@ def _save_missingno_plot(
     n_missing_columns = int((df.isnull().sum() > 0).sum())
     if n_missing_columns < min_missing_columns or len(df) == 0:
         return None
+    missing_columns = df.columns[df.isnull().any()]
+    missing_df = df.loc[:, missing_columns]
 
     if kind == "matrix":
         path = output_dir / "missingno_matrix.png"
         fig, ax = plt.subplots(figsize=(14.0, 6.0))
-        msno.matrix(df, ax=ax, sparkline=False, fontsize=8)
+        msno.matrix(missing_df, ax=ax, sparkline=False, fontsize=8)
+        ax.set_title("nullity matrix")
     elif kind == "heatmap":
         path = output_dir / "missingno_heatmap.png"
         fig, ax = plt.subplots(figsize=(10.0, 8.0))
-        msno.heatmap(df, ax=ax, fontsize=8)
+        msno.heatmap(missing_df, ax=ax, fontsize=8)
+        ax.set_title("Missingness Correlation Heatmap")
     elif kind == "bar":
         path = output_dir / "missingno_bar.png"
         fig, ax = plt.subplots(figsize=(14.0, 6.0))
-        msno.bar(df, ax=ax, fontsize=8)
+        msno.bar(missing_df, ax=ax, fontsize=8)
+        ax.set_title("bar chart of completeness")
     else:
         raise ValueError(f"Unsupported missingno plot kind: {kind!r}")
 
