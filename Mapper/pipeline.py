@@ -486,7 +486,12 @@ def run_mapper_workflow(
         tendency_report = {
             key: value
             for key, value in tendency_summary.items()
-            if key not in {"vat_matrix", "ivat_matrix", "vat_parents"}
+            if key not in {
+                "vat_matrix",
+                "ivat_matrix",
+                "vat_order",
+                "vat_parents",
+            }
         }
         tendency_report["embedding"] = {
             "space": "selected_model_latent_z",

@@ -609,20 +609,6 @@ def _save_embedding(
             )
             saved.append(str(cluster_png))
 
-            cluster_html = output_dir / (
-                f"latent_{safe_model_name}_{split}_{embedding_type}_cluster_{cluster_number}.html"
-            )
-            cluster_html_saved = _plot_latent_interactive(
-                cluster_df,
-                title=cluster_title,
-                out_html=cluster_html,
-                color_by=color_by,
-                random_state=random_state,
-                hover_sample_frac=interactive_hover_sample_frac,
-                datashader_threshold=interactive_threshold,
-            )
-            if cluster_html_saved is not None:
-                saved.append(str(cluster_html_saved))
     else:
         png_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.png"
         _plot_latent_matplotlib(
@@ -634,18 +620,21 @@ def _save_embedding(
         )
         saved.append(str(png_path))
 
-        html_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.html"
-        html_saved = _plot_latent_interactive(
-            embedding_df,
-            title=title,
-            out_html=html_path,
-            color_by=color_by,
-            random_state=random_state,
-            hover_sample_frac=interactive_hover_sample_frac,
-            datashader_threshold=interactive_threshold,
-        )
-        if html_saved is not None:
-            saved.append(str(html_saved))
+        if embedding_type == "umap":
+            html_path = output_dir / (
+                f"latent_{safe_model_name}_{split}_{embedding_type}.html"
+            )
+            html_saved = _plot_latent_interactive(
+                embedding_df,
+                title=title,
+                out_html=html_path,
+                color_by=color_by,
+                random_state=random_state,
+                hover_sample_frac=interactive_hover_sample_frac,
+                datashader_threshold=interactive_threshold,
+            )
+            if html_saved is not None:
+                saved.append(str(html_saved))
     return saved
 
 

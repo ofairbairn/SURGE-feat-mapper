@@ -55,6 +55,7 @@ def test_mapper_workflow_robustly_scales_from_training_split(
     root = Path(summary["artifacts"]["root"])
 
     assert summary["workflow_type"] == "mapper"
+    assert "vat_order" not in summary["cluster_tendency"]
     assert "vat_parents" not in summary["cluster_tendency"]
     gate_passed = summary["cluster_tendency"]["gate_passed"]
     if gate_passed:
@@ -99,6 +100,7 @@ def test_mapper_workflow_robustly_scales_from_training_split(
     saved_summary = json.loads(
         (root / "workflow_summary.json").read_text(encoding="utf-8")
     )
+    assert "vat_order" not in saved_summary["cluster_tendency"]
     assert "vat_parents" not in saved_summary["cluster_tendency"]
     if saved_summary["clustering"] is not None:
         assert "labels" not in saved_summary["clustering"]
