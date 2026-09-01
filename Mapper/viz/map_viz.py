@@ -595,7 +595,7 @@ def _save_embedding(
                 combined_scores[member_mask] if combined_scores is not None else None
             )
             cluster_title = (
-                f"{_model_short_name(model_name)} {split} cluster {cluster_number} t-SNE"
+                f"{_model_short_name(model_name)} cluster {cluster_number} t-SNE"
             )
             cluster_png = output_dir / (
                 f"latent_{safe_model_name}_{split}_{embedding_type}_cluster_{cluster_number}.png"
@@ -988,7 +988,7 @@ def viz_unsupervised_latent(
                         model_name=model_name,
                         split=split,
                         embedding_type=embedding_type,
-                        title=f"{_model_short_name(model_name)} {split} latent {embedding_type.upper()}",
+                        title=f"{_model_short_name(model_name)} latent {embedding_type.upper()}",
                         output_dir=output_dir,
                         color_by=color_by,
                         random_state=random_state,
@@ -1393,7 +1393,7 @@ def plot_mapper_latent(
                 model_name=model_name,
                 split=split,
                 embedding_type=embedding_type,
-                title=f"{_model_short_name(model_name)} {split} latent {embedding_type.upper()}",
+                title=f"{_model_short_name(model_name)} latent {embedding_type.upper()}",
                 output_dir=output_dir,
                 color_by=color_by,
                 random_state=random_state,
@@ -1532,14 +1532,14 @@ def plot_mapper_pca(
         y_vals = plotted_scores[:, 1]
         ax_scatter.set_xlabel("PC1")
         ax_scatter.set_ylabel("PC2")
-        ax_scatter.set_title(f"{_model_short_name(model_name)} {split} PCA scores")
+        ax_scatter.set_title(f"{_model_short_name(model_name)} PCA scores")
     else:
         x_vals = np.arange(Z.shape[0], dtype=np.int64)
         y_vals = plotted_scores[:, 0]
         ax_scatter.set_xlabel("Sample index")
         ax_scatter.set_ylabel("PC1")
         ax_scatter.set_title(
-            f"{_model_short_name(model_name)} {split} PCA scores (single component)"
+            f"{_model_short_name(model_name)} PCA scores (single component)"
         )
     ax_scatter.scatter(x_vals, y_vals, s=18, alpha=0.75, edgecolors="none")
     if plotted_scores.shape[1] >= 2:
