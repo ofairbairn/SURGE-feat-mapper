@@ -61,11 +61,11 @@ def _save_missingno_plot(
         fig, ax = plt.subplots(figsize=(14.0, 6.0))
         msno.matrix(missing_df, ax=ax, sparkline=False, fontsize=8)
         ax.set_title("nullity matrix")
-    elif kind == "heatmap":
-        path = output_dir / "missingno_heatmap.png"
-        fig, ax = plt.subplots(figsize=(10.0, 8.0))
-        msno.heatmap(missing_df, ax=ax, fontsize=8)
-        ax.set_title("Missingness Correlation Heatmap")
+    # elif kind == "heatmap":
+    #     path = output_dir / "missingno_heatmap.png"
+    #     fig, ax = plt.subplots(figsize=(10.0, 8.0))
+    #     msno.heatmap(missing_df, ax=ax, fontsize=8)
+    #     ax.set_title("Missingness Correlation Heatmap")
     elif kind == "bar":
         path = output_dir / "missingno_bar.png"
         fig, ax = plt.subplots(figsize=(14.0, 6.0))
@@ -160,14 +160,15 @@ def analyze_missingness(
     if save_plots and output_dir is not None:
         plot_dir = Path(output_dir)
         plot_dir.mkdir(parents=True, exist_ok=True)
-        for kind in ("matrix", "heatmap", "bar"):
-            min_missing_columns = 2 if kind == "heatmap" else 1
+        for kind in ("matrix", "bar"):
+            # Re-enable "heatmap" here with its branch above when the
+            # missingness correlation diagnostic returns to the workflow.
             try:
                 path = _save_missingno_plot(
                     kind,
                     df,
                     plot_dir,
-                    min_missing_columns=min_missing_columns,
+                    min_missing_columns=1,
                 )
                 if path is not None:
                     report["plots"][kind] = path.name
