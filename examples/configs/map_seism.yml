@@ -1,0 +1,78 @@
+workflow:
+  workflow_type: mapper
+  dataset_path: "C:\\Users\\Bipo1\\Downloads\\PNW Seismic Test Data\\microPNW_waveforms.hdf5"
+  dataset_format: auto
+  task_type: unsupervised
+  test_fraction: 0.2
+  val_fraction: 0.1
+  seed: 42
+  output_dir: runs
+  run_tag: "seis hdf5"
+  # Mapper ladder gate keys (val RMSE).
+  unsupervised_ladder_thresholds:
+    pca_max_recon_rmse: 0.18
+    ae_max_recon_rmse: 0.18
+    vae_max_recon_rmse: 0.18
+  mapper_diversity:
+    enabled: true
+    kernel: rbf
+    max_samples: 2000
+    save_similarity_matrix: true
+  # Hopkins is the automated clustering gate. VAT/iVAT are saved for visual
+  # inspection; max_samples bounds their O(n^2) distance matrices.
+  mapper_tendency:
+    enabled: true
+    hopkins_threshold: 0.55
+    hopkins_sample_size: null
+    max_samples: 1000
+    random_state: 42
+  # Runs only when the Hopkins gate passes. HDBSCAN always runs first and
+  # anchors k; silhouette/CH/DB/BIC vote within k_window of that anchor and
+  # the gap statistic adds a hint. k-means and GMM are then fit at selected_k
+  # and validated with ARI/AMI plus within/between-cluster Vendi.
+  mapper_clustering:
+    enabled: true
+    k_anchor: null
+    k_max: 10
+    k_window: 1
+    gap_k_max: 8
+    gap_n_references: 5
+    vendi_max_samples: 200
+    hdbscan_min_cluster_size: 10
+    hdbscan_min_samples: 3
+    gmm_covariance_type: full
+    random_state: 42
+  # Emits latent (UMAP/t-SNE) and reconstruction plots into runs/.../visualization
+  # as soon as the mapper run ends, from the in-memory latent and model.
+  mapper_visualization:
+    enabled: true
+    random_state: 42
+
+  models:
+    - key: sklearn.pca
+      name: PCA
+      params:
+        n_components: 2
+        svd_solver: auto
+        whiten: true
+    - key: pytorch.autoencoder
+      name: Autoencoder
+      params:
+        latent_dim: 8
+        hidden_dims: [128, 64, 32, 16, 8]
+        n_epochs: 150
+        batch_size: 128
+        learning_rate: 0.001
+        device: cpu
+        verbose: true
+    - key: pytorch.unsupervised_vae
+      name: VAE
+      params:
+        latent_dim: 8
+        hidden_dims: [128, 64, 32, 16, 8]
+        n_epochs: 150
+        batch_size: 128
+        learning_rate: 0.001
+        beta: 1.0
+        device: cpu
+        verbose: true
