@@ -258,6 +258,31 @@ def test_mapper_auto_detects_contiguous_square_pixel_columns() -> None:
     assert layout["ordered_input_columns"] == columns
 
 
+def test_mapper_image_layout_selects_named_pixels_over_extra_columns() -> None:
+    from Mapper.pipeline import _resolve_mapper_input_layout
+    from surge.dataset import SurrogateDataset
+
+    pixel_columns = [f"pixel{index}" for index in range(1, 17)]
+    frame = pd.DataFrame(
+        np.zeros((2, 18)), columns=[*pixel_columns, "label", "extra_value"]
+    )
+    dataset = SurrogateDataset.from_dataframe(
+        frame,
+        input_columns=[*pixel_columns, "extra_value"],
+        output_columns=pixel_columns,
+    )
+    spec = SurrogateWorkflowSpec(
+        dataset_path="unused.csv",
+        workflow_type="mapper",
+        data_type="image",
+        input_shape=(1, 4, 4),
+    )
+
+    layout = _resolve_mapper_input_layout(dataset, spec)
+
+    assert layout["ordered_input_columns"] == pixel_columns
+
+
 def test_mapper_reconstruction_payload_flattens_cnn_output() -> None:
     from Mapper.pipeline import _compute_reconstruction_payload
 

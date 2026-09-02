@@ -1209,7 +1209,10 @@ def _pixel_column_order(columns: Any) -> Optional[list[str]]:
     if not indexed:
         return None
     indexed.sort(key=lambda item: item[0])
-    if [index for index, _ in indexed] != list(range(len(indexed))):
+    first_index = indexed[0][0]
+    if [index for index, _ in indexed] != list(
+        range(first_index, first_index + len(indexed))
+    ):
         return None
     return [column for _, column in indexed]
 
@@ -1287,6 +1290,13 @@ def _resolve_mapper_input_layout(
     input_shape = _normalize_image_shape(raw_shape)
 
     pixel_columns = _pixel_column_order(dataset.input_columns)
+    named_pixel_columns = _pixel_column_order(
+        [
+            column
+            for column in dataset.input_columns
+            if _PIXEL_COLUMN_PATTERN.fullmatch(str(column)) is not None
+        ]
+    )
     n_features = len(dataset.input_columns)
     if data_type == "auto" and (input_shape is not None or configured_shape is not None):
         data_type = "image"
@@ -1322,6 +1332,13 @@ def _resolve_mapper_input_layout(
     if data_type == "image":
         assert input_shape is not None
         expected_features = int(np.prod(input_shape))
+        if (
+            pixel_columns is None
+            and named_pixel_columns is not None
+            and len(named_pixel_columns) == expected_features
+        ):
+            pixel_columns = named_pixel_columns
+            n_features = len(pixel_columns)
         if expected_features != n_features:
             raise ValueError(
                 f"input_shape={input_shape} contains {expected_features} values, "
