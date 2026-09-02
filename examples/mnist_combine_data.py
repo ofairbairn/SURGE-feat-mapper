@@ -1,49 +1,18 @@
-#!/usr/bin/env python
 """
-Make handy plots for presentation.
-Just for preprocessing, the normalization, standardization, minmax, robust scaler
+concatenate the mnist csv's from kaggle into one large dataset for surge.
 """
-
-from pathlib import Path
-import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
-import sklearn
-from sklearn.preprocessing import RobustScaler, MinMaxScaler, StandardScaler
-#rng = np.random.default_rng(seed=42)
-example_data = pd.read_csv('C:/Users/Bipo1/Downloads/PPPL Project Materials/SURGENEW/runs/generated_datasets/normal_2d.csv')
+mnist_train = pd.read_csv("C:\\Users\\Bipo1\\Downloads\\Kaggle MNIST CSV Data\\mnist_train.csv")
+mnist_test = pd.read_csv("C:\\Users\\Bipo1\\Downloads\\Kaggle MNIST CSV Data\\mnist_test.csv", skiprows=1)
+mnist_full = pd.concat([mnist_train, mnist_test], ignore_index=True)
+mnist_full.to_csv("C:\\Users\\Bipo1\\Downloads\\Kaggle MNIST CSV Data\\mnist_full.csv", index=False)
 
-plt.figure()
-plt.plot(example_data['x1'], example_data['x2'], marker='o', linewidth=0)
-plt.xlabel('x1')
-plt.ylabel('x2')
-plt.title('Random Gaussian 2D Data')
-plt.savefig('normal_2d_plot.png')
-plt.show()
+asl_mnist_train = pd.read_csv("C:\\Users\\Bipo1\\Downloads\\Kaggle ASL MNIST Data\\sign_mnist_train.csv")
+asl_mnist_test = pd.read_csv("C:\\Users\\Bipo1\\Downloads\\Kaggle ASL MNIST Data\\sign_mnist_test.csv", skiprows=1)
+asl_mnist_full = pd.concat([asl_mnist_train, asl_mnist_test], ignore_index=True)
+asl_mnist_full.to_csv("C:\\Users\\Bipo1\\Downloads\\Kaggle ASL MNIST Data\\sign_mnist_full.csv", index=False)
 
-#robust scaled
-r_scaled = RobustScaler().fit_transform(example_data[['x1', 'x2']])
-plt.figure()
-plt.plot(r_scaled[:, 0], r_scaled[:, 1], marker='o', linewidth=0)
-plt.xlabel('Robust x1')
-plt.ylabel('Robust x2')
-plt.title('Robust Scaled 2D Data')
-plt.savefig('robust_scaled_2d_plot.png')
-plt.show()
-#minmax scaled
-m_scaled = MinMaxScaler().fit_transform(example_data[['x1', 'x2']])
-plt.figure()
-plt.plot(m_scaled[:, 0], m_scaled[:, 1], marker='o', linewidth=0)
-plt.xlabel('MinMax x1')
-plt.ylabel('MinMaxx2')
-plt.title('MinMax Scaled 2D Data')
-plt.savefig('minmax_scaled_2d_plot.png')
-plt.show()#standard scaled
-s_scaled = StandardScaler().fit_transform(example_data[['x1', 'x2']])
-plt.figure()
-plt.plot(s_scaled[:, 0], s_scaled[:, 1], marker='o', linewidth=0)
-plt.xlabel('Standard x1')
-plt.ylabel('Standard x2')
-plt.title('Standard Scaled 2D Data')
-plt.savefig('standard_scaled_2d_plot.png')
-plt.show()
+fashion_train = pd.read_csv("C:\\Users\\Bipo1\\Downloads\\Kaggle Fashion MNIST Data\\fashion-mnist_train.csv")
+fashion_test = pd.read_csv("C:\\Users\\Bipo1\\Downloads\\Kaggle Fashion MNIST Data\\fashion-mnist_test.csv", skiprows=1)
+fashion_full = pd.concat([fashion_train, fashion_test], ignore_index=True)
+fashion_full.to_csv("C:\\Users\\Bipo1\\Downloads\\Kaggle Fashion MNIST Data\\fashion_full.csv", index=False)
