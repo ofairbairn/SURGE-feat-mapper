@@ -194,9 +194,7 @@ def run_mapper_workflow(
             preprocessing_report = analyze_missingness(
                 dataset.df,
                 preprocess_dir,
-                random_state=spec.seed,
                 save_plots=bool(preprocessing_config.get("save_plots", True)),
-                run_mcar_test=bool(preprocessing_config.get("run_mcar_test", True)),
             )
             preprocessing_report_path = (
                 preprocess_dir / "data_preprocessing.json"

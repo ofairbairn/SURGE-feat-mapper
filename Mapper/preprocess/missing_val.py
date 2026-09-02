@@ -7,9 +7,7 @@ the diagnostics the rest of ``surge`` does not provide:
 
 * per-column missing-value indices for the report,
 * missingno visualisations (binary matrix, nullity-correlation heatmap,
-  completeness bar) saved as PNGs,
-* a pairwise t-test matrix via
-  ``pyampute.exploration.mcar_statistical_tests.MCARTest``.
+    completeness bar) saved as PNGs.
 
 The analysis is intended to run on the raw loaded dataframe (before
 :meth:`surge.engine.SurrogateEngine.configure_dataframe` drops NaN rows), so
@@ -18,9 +16,8 @@ missingness is reported even when the engine later discards those rows.
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -83,44 +80,11 @@ def _save_missingno_plot(
     return path
 
 
-def _run_pairwise_ttest(numeric_df: pd.DataFrame) -> Dict[str, Any]:
-    """Pairwise t-test p-value matrix; None (plus reason) when not applicable."""
-    result: Dict[str, Any] = {"performed": False, "pairwise_ttest": None}
-    if numeric_df.shape[0] < 2 or numeric_df.shape[1] < 2:
-        result["note"] = (
-            "requires at least two rows and two numeric columns with missingness"
-        )
-        return result
-    if int((numeric_df.isnull().sum() > 0).sum()) < 1:
-        result["note"] = "no numeric column contains missing values"
-        return result
-    try:
-        from pyampute.exploration.mcar_statistical_tests import MCARTest
-
-        test = MCARTest(method="ttest")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            matrix = test.mcar_t_tests(numeric_df)
-        result["performed"] = True
-        result["pairwise_ttest"] = {
-            str(col): {
-                str(other): (None if pd.isna(value) else float(value))
-                for other, value in row.items()
-            }
-            for col, row in matrix.iterrows()
-        }
-    except Exception as exc:  # empty groups (all-NaN column), etc.
-        result["ttest_error"] = f"{type(exc).__name__}: {exc}"
-    return result
-
-
 def analyze_missingness(
     df: pd.DataFrame,
     output_dir: Optional[Union[str, Path]] = None,
     *,
-    random_state: int = 42,
     save_plots: bool = True,
-    run_mcar_test: bool = True,
 ) -> Dict[str, Any]:
     """Detect missing values in ``df`` and build a JSON-serializable report.
 
@@ -131,19 +95,14 @@ def analyze_missingness(
         dropped NaN rows so missingness is not hidden.
     output_dir:
         Directory for the missingno PNGs (skipped when ``None``).
-    random_state:
-        Reserved for deterministic future diagnostics (e.g. subsampling).
     save_plots:
         Render and save missingno plots when missing values are detected.
-    run_mcar_test:
-        Run the pairwise t-test matrix on numeric columns that contain
-        missing values.
 
     Returns
     -------
     dict
         Report with per-column counts, missing indices, completeness, plot
-        paths and pairwise t-test results. Always JSON-serializable.
+        paths. Always JSON-serializable.
     """
     if not isinstance(df, pd.DataFrame):
         raise TypeError(f"analyze_missingness expects a DataFrame, got {type(df)}")
@@ -214,27 +173,6 @@ def analyze_missingness(
                     report["plots"][kind] = path.name
             except Exception as exc:  # individual plots must not fail the report
                 report["plot_errors"][kind] = f"{type(exc).__name__}: {exc}"
-
-    if run_mcar_test and missing_values_detected:
-        numeric_df = df.select_dtypes(include=[np.number])
-        report["mcar_test"] = {
-            **_run_pairwise_ttest(numeric_df),
-        }
-        report["mcar_test"]["random_state"] = random_state
-        mcar_note = report["mcar_test"].get("note")
-        if mcar_note:
-            report["mcar_test"]["note"] = (
-                f"{mcar_note}; non-numeric columns are excluded from the test"
-            )
-    else:
-        report["mcar_test"] = {
-            "performed": False,
-            "note": (
-                "no missing values detected"
-                if not missing_values_detected
-                else "MCAR testing disabled"
-            ),
-        }
 
     return report
 
