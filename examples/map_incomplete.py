@@ -1,4 +1,4 @@
-"""Run the SURGE Mapper ladder on a generated 4D uniform dataset."""
+"""Run the SURGE Mapper ladder on a generated swiss roll incomplete dataset."""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ from surge.workflow.run import run_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 
 _REPO = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = _REPO / "examples" / "configs" / "map_4dsynth.yaml"
+DEFAULT_CONFIG = _REPO / "examples" / "configs" / "map_incomplete.yaml"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Test structure reporting with random synthetic data."
+        description="Test structure reporting with synth data."
     )
     parser.add_argument(
         "--config",
@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         invocation={"script": str(Path(__file__).resolve()), "spec_path": str(config_path)},
     )
 
-    print("4d synth Mapper workflow complete.")
+    print("swiss roll incomplete Mapper workflow complete.")
     ladder = summary["representation_ladder"]
     print(f"Selected representation: {ladder['selected_rung']}")
     print("Validation reconstruction RMSE:")

@@ -69,7 +69,7 @@ workflow:
       params:
         n_components: 0.95
         svd_solver: auto
-        whiten: false
+        whiten: True
 
     - key: pytorch.autoencoder
       name: Autoencoder

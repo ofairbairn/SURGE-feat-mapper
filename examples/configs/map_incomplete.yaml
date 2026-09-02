@@ -1,21 +1,21 @@
 workflow:
   workflow_type: mapper
-  dataset_path: runs/generated_datasets/uniform_4d.csv
+  dataset_path: runs/generated_datasets/swiss_roll_incomplete.csv
   dataset_format: csv
   task_type: unsupervised
   test_fraction: 0.2
   val_fraction: 0.1
   seed: 42
   output_dir: runs
-  run_tag: 4dsynth_data
+  run_tag: incomplete_swiss
   overwrite_existing_run: false
 
   # Zero thresholds force every rung to run so their validation RMSE values
   # can be compared; the smallest-RMSE rung supplies the final latent.
   unsupervised_ladder_thresholds:
-    pca_max_recon_rmse: 0.15
-    ae_max_recon_rmse: 0.15
-    vae_max_recon_rmse: 0.15
+    pca_max_recon_rmse: 0.04
+    ae_max_recon_rmse: 0.04
+    vae_max_recon_rmse: 0.04
 
   mapper_diversity:
     enabled: true
@@ -67,10 +67,9 @@ workflow:
     - key: sklearn.pca
       name: PCA
       params:
-        n_components: 0.95
+        n_components: 2
         svd_solver: auto
-        whiten: false
-
+        whiten: True
     - key: pytorch.autoencoder
       name: Autoencoder
       params:
@@ -81,7 +80,6 @@ workflow:
         learning_rate: 0.001
         device: cpu
         verbose: false
-
     - key: pytorch.unsupervised_vae
       name: VAE
       params:
