@@ -210,8 +210,6 @@ def run_mapper_workflow(
                 preprocessing_artifacts[f"plot_{kind}"] = posix_str(
                     preprocess_dir / name
                 )
-            mcar_result = preprocessing_report.get("mcar_test") or {}
-            little_p = mcar_result.get("little_pvalue")
             print(
                 "[Mapper Preprocess] "
                 f"status=complete, scaling={_scaling_summary(scaler)['method']}, "
@@ -219,12 +217,7 @@ def run_mapper_workflow(
                 f"{preprocessing_report.get('missing_values_detected')}, "
                 f"completeness="
                 f"{preprocessing_report.get('completeness_percent')}%, "
-                f"missing_cells={preprocessing_report.get('n_missing_cells')}"
-                + (
-                    f", little_mcar_p={little_p:.4f}"
-                    if isinstance(little_p, (int, float))
-                    else ""
-                ),
+                f"missing_cells={preprocessing_report.get('n_missing_cells')}",
                 flush=True,
             )
         except Exception as exc:

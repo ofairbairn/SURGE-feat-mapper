@@ -8,7 +8,7 @@ the diagnostics the rest of ``surge`` does not provide:
 * per-column missing-value indices for the report,
 * missingno visualisations (binary matrix, nullity-correlation heatmap,
   completeness bar) saved as PNGs,
-* a Little's MCAR chi-square test and pairwise t-test matrix via
+* a pairwise t-test matrix via
   ``pyampute.exploration.mcar_statistical_tests.MCARTest``.
 
 The analysis is intended to run on the raw loaded dataframe (before
@@ -83,31 +83,6 @@ def _save_missingno_plot(
     return path
 
 
-def _run_little_mcar_test(numeric_df: pd.DataFrame) -> Dict[str, Any]:
-    """Little's chi-square MCAR test; None (plus reason) when not applicable."""
-    result: Dict[str, Any] = {"performed": False, "little_pvalue": None}
-    if numeric_df.shape[0] < 2 or numeric_df.shape[1] < 2:
-        result["note"] = (
-            "requires at least two rows and two numeric columns with missingness"
-        )
-        return result
-    if int((numeric_df.isnull().sum() > 0).sum()) < 1:
-        result["note"] = "no numeric column contains missing values"
-        return result
-    try:
-        from pyampute.exploration.mcar_statistical_tests import MCARTest
-
-        test = MCARTest(method="little")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            pvalue = test.little_mcar_test(numeric_df)
-        result["performed"] = True
-        result["little_pvalue"] = None if pvalue is None else float(pvalue)
-    except Exception as exc:  # singular covariance, single pattern, etc.
-        result["little_error"] = f"{type(exc).__name__}: {exc}"
-    return result
-
-
 def _run_pairwise_ttest(numeric_df: pd.DataFrame) -> Dict[str, Any]:
     """Pairwise t-test p-value matrix; None (plus reason) when not applicable."""
     result: Dict[str, Any] = {"performed": False, "pairwise_ttest": None}
@@ -161,14 +136,14 @@ def analyze_missingness(
     save_plots:
         Render and save missingno plots when missing values are detected.
     run_mcar_test:
-        Run Little's MCAR chi-square test and the pairwise t-test matrix on
-        the numeric columns that contain missing values.
+        Run the pairwise t-test matrix on numeric columns that contain
+        missing values.
 
     Returns
     -------
     dict
         Report with per-column counts, missing indices, completeness, plot
-        paths and MCAR test results. Always JSON-serializable.
+        paths and pairwise t-test results. Always JSON-serializable.
     """
     if not isinstance(df, pd.DataFrame):
         raise TypeError(f"analyze_missingness expects a DataFrame, got {type(df)}")
@@ -243,7 +218,6 @@ def analyze_missingness(
     if run_mcar_test and missing_values_detected:
         numeric_df = df.select_dtypes(include=[np.number])
         report["mcar_test"] = {
-            **_run_little_mcar_test(numeric_df),
             **_run_pairwise_ttest(numeric_df),
         }
         report["mcar_test"]["random_state"] = random_state
