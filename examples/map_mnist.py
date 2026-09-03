@@ -1,4 +1,4 @@
-"""Run a SURGE Mapper workflow on ASL MNIST Data."""
+"""Run a SURGE Mapper workflow on MNIST Data."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import surge  # noqa: F401 - ensure adapters are registered
 from surge.workflow.run import run_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 
-DEFAULT_CONFIG = Path("examples/configs/map_asl.yml")
+DEFAULT_CONFIG = Path("examples/configs/map_mnist.yml")
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
 	sys.path.insert(0, str(_REPO))
