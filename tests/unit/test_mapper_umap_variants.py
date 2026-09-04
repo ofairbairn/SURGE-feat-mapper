@@ -60,10 +60,10 @@ def test_save_embedding_renders_four_umap_color_variants(
 
     png_names = [Path(path).name for path in saved if path.endswith(".png")]
     assert png_names == [
-        "latent_mapper_pca_train_val_test_umap_anomaly.png",
-        "latent_mapper_pca_train_val_test_umap_cluster.png",
-        "latent_mapper_pca_train_val_test_umap_split.png",
-        "latent_mapper_pca_train_val_test_umap_marginal_vendi.png",
+        "latent_mapper_pca_umap_anomaly.png",
+        "latent_mapper_pca_umap_cluster.png",
+        "latent_mapper_pca_umap_split.png",
+        "latent_mapper_pca_umap_marginal_vendi.png",
     ]
     assert len(plot_calls) == 4
     np.testing.assert_array_equal(plot_calls[0]["color_scores"], anomaly)

@@ -869,7 +869,6 @@ def run_mapper_workflow(
                     Z_all,
                     output_dir=viz_dir,
                     model_name=f"mapper_{selected_rung}",
-                    split="train_val_test",
                     explained_variance_ratio=_extract_pca_explained_variance_ratio(
                         selected_adapter
                     ),

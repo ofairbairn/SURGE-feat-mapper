@@ -6,12 +6,14 @@ workflow:
   test_fraction: 0.2
   val_fraction: 0.1
   seed: 42
-  output_dir: runs
+  output_dir: .
+  run_tag: red_wine
+  overwrite_existing_run: false
   # Mapper ladder gate keys (val RMSE).
   unsupervised_ladder_thresholds:
-    pca_max_recon_rmse: 0.18
+    pca_max_recon_rmse: 0.15
     ae_max_recon_rmse: 0.18
-    vae_max_recon_rmse: 0.18
+    vae_max_recon_rmse: 0.20
   mapper_diversity:
     enabled: true
     kernel: rbf
@@ -37,9 +39,23 @@ workflow:
     gap_k_max: 8
     gap_n_references: 5
     vendi_max_samples: 200
-    hdbscan_min_cluster_size: 10
-    hdbscan_min_samples: 3
+    hdbscan_min_cluster_size: 20
+    hdbscan_min_samples: null
     gmm_covariance_type: full
+    random_state: 42
+  mapper_stability:
+    enabled: true
+    n_bootstraps: 10
+    bootstrap_fraction: 0.8
+    max_samples: 1000
+    random_state: 42
+  mapper_anomaly:
+    enabled: true
+    top_n: 10
+    reason_quantile: 0.9
+    isolation_forest_n_estimators: 100
+    lof_n_neighbors: 20
+    vendi_max_samples: 200
     random_state: 42
   # Emits latent (UMAP/t-SNE) and reconstruction plots into runs/.../visualization
   # as soon as the mapper run ends, from the in-memory latent and model.
@@ -51,14 +67,14 @@ workflow:
     - key: sklearn.pca
       name: PCA
       params:
-        n_components: 0.95
+        n_components: 2
         svd_solver: auto
         whiten: true
     - key: pytorch.autoencoder
       name: Autoencoder
       params:
         latent_dim: 8
-        hidden_dims: [128, 64, 32]
+        hidden_dims: [128, 64, 32, 16, 8]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001
@@ -68,10 +84,11 @@ workflow:
       name: VAE
       params:
         latent_dim: 8
-        hidden_dims: [128, 64, 32]
+        hidden_dims: [128, 64, 32, 16, 8]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001
         beta: 1.0
+        max_grad_norm: 1.0
         device: cpu
         verbose: true

@@ -67,7 +67,7 @@ workflow:
     - key: sklearn.pca
       name: PCA
       params:
-        n_components: 0.95
+        n_components: 2
         svd_solver: auto
         whiten: true
     - key: pytorch.autoencoder

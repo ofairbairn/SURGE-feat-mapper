@@ -688,7 +688,7 @@ def _save_embedding(
                 f"{_model_short_name(model_name)} cluster {cluster_number} t-SNE"
             )
             cluster_png = output_dir / (
-                f"latent_{safe_model_name}_{split}_{embedding_type}_cluster_{cluster_number}.png"
+                f"latent_{safe_model_name}_cluster_{cluster_number}.png"
             )
             _plot_latent_matplotlib(
                 cluster_df,
@@ -749,7 +749,7 @@ def _save_embedding(
             unit="plot",
         ):
             png_path = output_dir / (
-                f"latent_{safe_model_name}_{split}_{embedding_type}_{suffix}.png"
+                f"latent_{safe_model_name}_{embedding_type}_{suffix}.png"
             )
             _plot_latent_matplotlib(
                 embedding_df,
@@ -780,7 +780,7 @@ def _save_embedding(
             if html_saved is not None:
                 saved.append(str(html_saved))
     else:
-        png_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.png"
+        png_path = output_dir / f"latent_{safe_model_name}_{embedding_type}.png"
         _plot_latent_matplotlib(
             embedding_df,
             title=title,
@@ -1054,16 +1054,16 @@ def viz_unsupervised_latent(
 
                 vat_png = _save_tendency_heatmap(
                     np.asarray(tendency_summary["vat_matrix"], dtype=np.float64),
-                    out_png=output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_vat.png",
-                    title=f"{_model_short_name(model_name)} {split} VAT",
+                    out_png=output_dir / f"latent_{model_name.replace(' ', '_')}_vat.png",
+                    title=f"{_model_short_name(model_name)} VAT",
                 )
                 if vat_png is not None:
                     saved_paths.append(str(vat_png))
 
                 ivat_png = _save_tendency_heatmap(
                     np.asarray(tendency_summary["ivat_matrix"], dtype=np.float64),
-                    out_png=output_dir / f"latent_{model_name.replace(' ', '_')}_{split}_ivat.png",
-                    title=f"{_model_short_name(model_name)} {split} iVAT",
+                    out_png=output_dir / f"latent_{model_name.replace(' ', '_')}_ivat.png",
+                    title=f"{_model_short_name(model_name)} iVAT",
                 )
                 if ivat_png is not None:
                     saved_paths.append(str(ivat_png))
@@ -1098,10 +1098,10 @@ def viz_unsupervised_latent(
                     linkage_matrix = None
 
             if cluster_method.lower().strip() == "agglomerative" and linkage_matrix is not None:
-                dendrogram_path = output_dir / f"latent_{safe_model_name}_{split}_dendrogram.png"
+                dendrogram_path = output_dir / f"latent_{safe_model_name}_dendrogram.png"
                 dendrogram_saved = _plot_latent_dendrogram(
                     Z,
-                    title=f"{_model_short_name(model_name)} {split} latent dendrogram",
+                    title=f"{_model_short_name(model_name)} latent dendrogram",
                     out_png=dendrogram_path,
                     random_state=random_state,
                     linkage_method=agglomerative_linkage,
@@ -1571,16 +1571,16 @@ def plot_mapper_latent(
 
         vat_png = _save_tendency_heatmap(
             np.asarray(tendency.get("vat_matrix", np.zeros((0, 0))), dtype=np.float64),
-            out_png=output_dir / f"latent_{safe_model_name}_{split}_vat.png",
-            title=f"{_model_short_name(model_name)} {split} VAT",
+            out_png=output_dir / f"latent_{safe_model_name}_vat.png",
+            title=f"{_model_short_name(model_name)} VAT",
         )
         if vat_png is not None:
             saved_paths.append(str(vat_png))
 
         ivat_png = _save_tendency_heatmap(
             np.asarray(tendency.get("ivat_matrix", np.zeros((0, 0))), dtype=np.float64),
-            out_png=output_dir / f"latent_{safe_model_name}_{split}_ivat.png",
-            title=f"{_model_short_name(model_name)} {split} iVAT",
+            out_png=output_dir / f"latent_{safe_model_name}_ivat.png",
+            title=f"{_model_short_name(model_name)} iVAT",
         )
         if ivat_png is not None:
             saved_paths.append(str(ivat_png))
@@ -1671,7 +1671,7 @@ def plot_mapper_reconstruction(
         df[f"y_true_{i:02d}"] = y_true[:, i]
         df[f"y_pred_{i:02d}"] = y_pred[:, i]
 
-    out_prefix = output_dir / f"reconstruction_{model_name.replace(' ', '_')}_{split}"
+    out_prefix = output_dir / f"reconstruction_{model_name.replace(' ', '_')}"
     saved = _reconstruction_diagnostics(
         df,
         out_prefix,
@@ -1733,7 +1733,7 @@ def plot_mapper_pca(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     safe_model_name = model_name.replace(" ", "_")
-    out_png = output_dir / f"pca_{safe_model_name}_{split}.png"
+    out_png = output_dir / f"pca_{safe_model_name}.png"
 
     evr = None
     if explained_variance_ratio is not None:
