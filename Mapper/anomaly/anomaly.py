@@ -30,6 +30,15 @@ _DENSITY_SIGNALS = (
     "local_outlier_factor",
 )
 
+_SIGNAL_WEIGHTS = {
+    "reconstruction_error": 1.0,
+    "hdbscan_glosh": 0.5,
+    "gmm_mahalanobis": 0.5,
+    "isolation_forest": 1.0,
+    "local_outlier_factor": 1.0,
+    "marginal_vendi": 1.0,
+}
+
 
 def _as_2d_array(latent: Any) -> np.ndarray:
     arr = np.asarray(latent, dtype=np.float64)
@@ -256,14 +265,21 @@ def _combine_percentile_ranks(
     percentile_ranks: Dict[str, Optional[np.ndarray]],
     n_samples: int,
 ) -> np.ndarray:
-    """Mean of available per-signal percentile ranks; NaN where no signal is available."""
-    stacked = [ranks for ranks in percentile_ranks.values() if ranks is not None]
+    """Weighted mean of available ranks; NaN where no signal is available."""
     combined = np.full(n_samples, np.nan, dtype=np.float64)
-    if not stacked:
-        return combined
-    stack = np.vstack(stacked)
-    has_any = np.sum(np.isfinite(stack), axis=0) > 0
-    combined[has_any] = np.nanmean(stack[:, has_any], axis=0)
+    weighted_sum = np.zeros(n_samples, dtype=np.float64)
+    available_weight = np.zeros(n_samples, dtype=np.float64)
+
+    for name, weight in _SIGNAL_WEIGHTS.items():
+        ranks = percentile_ranks.get(name)
+        if ranks is None:
+            continue
+        valid = np.isfinite(ranks)
+        weighted_sum[valid] += weight * ranks[valid]
+        available_weight[valid] += weight
+
+    has_any = available_weight > 0.0
+    combined[has_any] = weighted_sum[has_any] / available_weight[has_any]
     return combined
 
 
@@ -441,7 +457,10 @@ def run_anomaly_detection(
             },
             "marginal_vendi": vendi_info,
         },
-        "combined": {"method": "mean_of_available_percentile_ranks"},
+        "combined": {
+            "method": "weighted_mean_of_available_percentile_ranks",
+            "weights": dict(_SIGNAL_WEIGHTS),
+        },
         "top_anomalies": top_anomalies,
         "warning": (
             "TheMapper ranks and flags these samples for human review. It does not "
