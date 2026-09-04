@@ -645,11 +645,11 @@ def _save_embedding(
     }
 
     safe_model_name = model_name.replace(" ", "_")
-    parquet_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}.parquet"
+    parquet_path = output_dir / f"latent_{safe_model_name}_{embedding_type}.parquet"
     embedding_df.to_parquet(parquet_path, index=False)
     saved.append(str(parquet_path))
 
-    quality_path = output_dir / f"latent_{safe_model_name}_{split}_{embedding_type}_quality.json"
+    quality_path = output_dir / f"latent_{safe_model_name}_{embedding_type}_quality.json"
     with quality_path.open("w", encoding="utf-8") as handle:
         json.dump(quality_payload, handle, indent=2)
     saved.append(str(quality_path))
@@ -766,7 +766,7 @@ def _save_embedding(
         # dynamically sized cluster palette. t-SNE never emits HTML.
         if not embedding_df["cluster"].isna().all():
             html_path = output_dir / (
-                f"latent_{safe_model_name}_{split}_{embedding_type}_cluster.html"
+                f"latent_{safe_model_name}_{embedding_type}_cluster.html"
             )
             html_saved = _plot_latent_interactive(
                 embedding_df,

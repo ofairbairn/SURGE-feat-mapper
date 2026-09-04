@@ -22,7 +22,7 @@ def test_save_embedding_renders_four_umap_color_variants(
     monkeypatch.setattr(
         map_viz,
         "_plot_latent_interactive",
-        lambda *_args, **_kwargs: None,
+        lambda *_args, out_html, **_kwargs: out_html,
     )
     monkeypatch.setattr(
         map_viz,
@@ -58,12 +58,15 @@ def test_save_embedding_renders_four_umap_color_variants(
         latent_quality_n_neighbors=2,
     )
 
-    png_names = [Path(path).name for path in saved if path.endswith(".png")]
-    assert png_names == [
+    artifact_names = [Path(path).name for path in saved]
+    assert artifact_names == [
+        "latent_mapper_pca_umap.parquet",
+        "latent_mapper_pca_umap_quality.json",
         "latent_mapper_pca_umap_anomaly.png",
         "latent_mapper_pca_umap_cluster.png",
         "latent_mapper_pca_umap_split.png",
         "latent_mapper_pca_umap_marginal_vendi.png",
+        "latent_mapper_pca_umap_cluster.html",
     ]
     assert len(plot_calls) == 4
     np.testing.assert_array_equal(plot_calls[0]["color_scores"], anomaly)

@@ -23,7 +23,7 @@ workflow:
   # inspection; max_samples bounds their O(n^2) distance matrices.
   mapper_tendency:
     enabled: true
-    hopkins_threshold: 0.55
+    hopkins_threshold: 0.65
     hopkins_sample_size: null
     max_samples: 1000
     random_state: 42
