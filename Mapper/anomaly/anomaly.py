@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
+from Mapper.progress import mapper_progress, timed_operation
+
 _SIGNAL_REASON_TEXT = {
     "reconstruction_error": "high reconstruction error",
     "hdbscan_glosh": "HDBSCAN flags it as noise (high GLOSH outlier score)",
@@ -101,7 +103,8 @@ def _compute_hdbscan_glosh(
             min_cluster_size=effective_min_cluster_size,
             min_samples=min_samples,
         )
-        clusterer.fit(latent)
+        with timed_operation("anomaly", "HDBSCAN GLOSH fit"):
+            clusterer.fit(latent)
         return np.asarray(clusterer.outlier_scores_, dtype=np.float64)
     except Exception:
         return None
@@ -142,12 +145,13 @@ def _compute_gmm_mahalanobis(
     n_samples = len(latent)
     n_components_eff = max(1, min(int(n_components), n_samples))
     try:
-        gmm = GaussianMixture(
-            n_components=n_components_eff,
-            covariance_type=str(covariance_type),
-            random_state=random_state,
-            reg_covar=1e-6,
-        ).fit(latent)
+        with timed_operation("anomaly", f"GMM Mahalanobis fit (k={n_components_eff})"):
+            gmm = GaussianMixture(
+                n_components=n_components_eff,
+                covariance_type=str(covariance_type),
+                random_state=random_state,
+                reg_covar=1e-6,
+            ).fit(latent)
     except Exception:
         return None
 
@@ -157,7 +161,13 @@ def _compute_gmm_mahalanobis(
         return None
 
     distances = np.full((n_samples, n_components_eff), np.inf, dtype=np.float64)
-    for k in range(n_components_eff):
+    for k in mapper_progress(
+        range(n_components_eff),
+        stage="anomaly",
+        operation="GMM Mahalanobis distances",
+        total=n_components_eff,
+        unit="component",
+    ):
         diff = latent - gmm.means_[k]
         quad = np.einsum("ij,jk,ik->i", diff, precisions[k], diff)
         distances[:, k] = np.sqrt(np.clip(quad, 0.0, None))
@@ -180,7 +190,8 @@ def _compute_isolation_forest(
             contamination=contamination,
             random_state=random_state,
         )
-        model.fit(latent)
+        with timed_operation("anomaly", "Isolation Forest fit"):
+            model.fit(latent)
         return -np.asarray(model.score_samples(latent), dtype=np.float64)
     except Exception:
         return None
@@ -201,7 +212,8 @@ def _compute_local_outlier_factor(
         return None
     try:
         model = LocalOutlierFactor(n_neighbors=k, novelty=False, contamination=contamination)
-        model.fit_predict(latent)
+        with timed_operation("anomaly", "Local Outlier Factor fit"):
+            model.fit_predict(latent)
         return -np.asarray(model.negative_outlier_factor_, dtype=np.float64)
     except Exception:
         return None
@@ -238,7 +250,11 @@ def _marginal_vendi_contribution(
 
     Z_used = latent[positions]
     try:
-        similarity, kernel_report = build_rbf_similarity_matrix(Z_used, bandwidth=rbf_bandwidth)
+        similarity, kernel_report = build_rbf_similarity_matrix(
+            Z_used,
+            bandwidth=rbf_bandwidth,
+            progress_stage="anomaly",
+        )
         base_vs = float(vendi.score_K(similarity, q=1))
     except Exception as exc:
         info["available"] = False
@@ -246,7 +262,13 @@ def _marginal_vendi_contribution(
         return positions, None, info
 
     contributions = np.full(len(positions), np.nan, dtype=np.float64)
-    for local_i in range(len(positions)):
+    for local_i in mapper_progress(
+        range(len(positions)),
+        stage="anomaly",
+        operation="marginal Vendi leave-one-out",
+        total=len(positions),
+        unit="sample",
+    ):
         reduced = np.delete(np.delete(similarity, local_i, axis=0), local_i, axis=1)
         if reduced.shape[0] < 2:
             continue
@@ -352,34 +374,55 @@ def run_anomaly_detection(
         else max(1, min(8, int(round(np.sqrt(n_samples)))))
     )
 
-    hdbscan_glosh = _compute_hdbscan_glosh(
-        latent_array,
-        min_cluster_size=hdbscan_min_cluster_size,
-        min_samples=hdbscan_min_samples,
-    )
-    gmm_mahalanobis = _compute_gmm_mahalanobis(
-        latent_array,
-        n_components=n_components_hint,
-        covariance_type=gmm_covariance_type,
-        random_state=random_state,
-    )
-    isolation_forest_scores = _compute_isolation_forest(
-        latent_array,
-        n_estimators=isolation_forest_n_estimators,
-        contamination=isolation_forest_contamination,
-        random_state=random_state,
-    )
-    lof_scores = _compute_local_outlier_factor(
-        latent_array,
-        n_neighbors=lof_n_neighbors,
-        contamination=lof_contamination,
-    )
-    vendi_positions, vendi_contribution_sub, vendi_info = _marginal_vendi_contribution(
-        latent_array,
-        max_samples=vendi_max_samples,
-        random_state=random_state,
-        rbf_bandwidth=rbf_bandwidth,
-    )
+    with mapper_progress(
+        stage="anomaly",
+        operation="detection signals",
+        total=6,
+        unit="signal",
+    ) as signal_progress:
+        # Reconstruction error is supplied by the representation stage.
+        signal_progress.update(1)
+        signal_progress.set_postfix(signal="reconstruction error")
+        hdbscan_glosh = _compute_hdbscan_glosh(
+            latent_array,
+            min_cluster_size=hdbscan_min_cluster_size,
+            min_samples=hdbscan_min_samples,
+        )
+        signal_progress.update(1)
+        signal_progress.set_postfix(signal="HDBSCAN GLOSH")
+        gmm_mahalanobis = _compute_gmm_mahalanobis(
+            latent_array,
+            n_components=n_components_hint,
+            covariance_type=gmm_covariance_type,
+            random_state=random_state,
+        )
+        signal_progress.update(1)
+        signal_progress.set_postfix(signal="GMM Mahalanobis")
+        isolation_forest_scores = _compute_isolation_forest(
+            latent_array,
+            n_estimators=isolation_forest_n_estimators,
+            contamination=isolation_forest_contamination,
+            random_state=random_state,
+        )
+        signal_progress.update(1)
+        signal_progress.set_postfix(signal="Isolation Forest")
+        lof_scores = _compute_local_outlier_factor(
+            latent_array,
+            n_neighbors=lof_n_neighbors,
+            contamination=lof_contamination,
+        )
+        signal_progress.update(1)
+        signal_progress.set_postfix(signal="LOF")
+        vendi_positions, vendi_contribution_sub, vendi_info = (
+            _marginal_vendi_contribution(
+                latent_array,
+                max_samples=vendi_max_samples,
+                random_state=random_state,
+                rbf_bandwidth=rbf_bandwidth,
+            )
+        )
+        signal_progress.update(1)
+        signal_progress.set_postfix(signal="marginal Vendi")
     marginal_vendi_full: Optional[np.ndarray] = None
     if vendi_contribution_sub is not None:
         marginal_vendi_full = np.full(n_samples, np.nan, dtype=np.float64)

@@ -30,6 +30,7 @@ from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
 
 from .cluster import run_cluster_analysis
 from .preprocess import DataScaler, ImageDataScaler, analyze_missingness
+from .progress import mapper_progress
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
 from .anomaly.anomaly import run_anomaly_detection
 from .stability.stability import run_cluster_stability
@@ -160,9 +161,21 @@ def run_mapper_workflow(
         if input_layout["data_type"] == "image"
         else DataScaler()
     )
-    X_train = scaler.fit_transform(raw.X_train)
-    X_val = scaler.transform(raw.X_val)
-    X_test = scaler.transform(raw.X_test) if raw.X_test is not None else None
+    scaling_steps = 2 + int(raw.X_test is not None)
+    with mapper_progress(
+        stage="preprocess",
+        operation="robust scaling",
+        total=scaling_steps,
+        unit="split",
+    ) as scaling_progress:
+        X_train = scaler.fit_transform(raw.X_train)
+        scaling_progress.update(1)
+        X_val = scaler.transform(raw.X_val)
+        scaling_progress.update(1)
+        X_test = None
+        if raw.X_test is not None:
+            X_test = scaler.transform(raw.X_test)
+            scaling_progress.update(1)
 
     run_tag = spec.run_tag or _default_mapper_run_tag(dataset.file_path)
     paths = init_artifact_paths(

@@ -13,6 +13,8 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
+from Mapper.progress import mapper_progress, timed_operation
+
 
 _STABILITY_JACCARD_STRONG_THRESHOLD = 0.85
 _STABILITY_JACCARD_MODERATE_THRESHOLD = 0.60
@@ -94,7 +96,9 @@ def _fit_kmeans_labels(
 	from sklearn.cluster import KMeans
 
 	model = KMeans(n_clusters=int(n_clusters), random_state=random_state, n_init="auto")
-	return model.fit_predict(latent)
+	with timed_operation("stability", f"K-means fit (k={int(n_clusters)})"):
+		labels = model.fit_predict(latent)
+	return labels
 
 
 def _fit_kmeans_model(
@@ -106,7 +110,8 @@ def _fit_kmeans_model(
 	from sklearn.cluster import KMeans
 
 	model = KMeans(n_clusters=int(n_clusters), random_state=random_state, n_init="auto")
-	model.fit(latent)
+	with timed_operation("stability", f"K-means fit (k={int(n_clusters)})"):
+		model.fit(latent)
 	return model
 
 
@@ -125,7 +130,9 @@ def _fit_gmm_labels(
 		random_state=random_state,
 		reg_covar=1e-6,
 	)
-	return model.fit(latent).predict(latent)
+	with timed_operation("stability", f"GMM fit (k={int(n_clusters)})"):
+		labels = model.fit(latent).predict(latent)
+	return labels
 
 
 def _fit_gmm_model(
@@ -143,7 +150,8 @@ def _fit_gmm_model(
 		random_state=random_state,
 		reg_covar=1e-6,
 	)
-	model.fit(latent)
+	with timed_operation("stability", f"GMM fit (k={int(n_clusters)})"):
+		model.fit(latent)
 	return model
 
 
@@ -160,7 +168,8 @@ def _fit_hdbscan_model(
 		min_samples=None if min_samples is None else int(min_samples),
 		prediction_data=True,
 	)
-	model.fit(latent)
+	with timed_operation("stability", "HDBSCAN fit"):
+		model.fit(latent)
 	return model
 
 
@@ -200,7 +209,13 @@ def _coassociation_matrix(label_sets: list[np.ndarray]) -> np.ndarray:
 
 	n_samples = len(label_sets[0])
 	matrix = np.zeros((n_samples, n_samples), dtype=np.float64)
-	for labels in label_sets:
+	for labels in mapper_progress(
+		label_sets,
+		stage="stability",
+		operation="coassociation matrix",
+		total=len(label_sets),
+		unit="partition",
+	):
 		same = np.equal.outer(labels, labels).astype(np.float64)
 		np.fill_diagonal(same, 0.0)
 		matrix += same
@@ -348,105 +363,130 @@ def run_cluster_stability(
 	hdbscan_degenerate_bootstraps = 0
 
 	rng = np.random.default_rng(random_state)
-	for _ in range(bootstrap_count):
-		success = False
-		for _attempt in range(5):
-			positions = _bootstrap_positions(
-				n_used,
-				bootstrap_fraction=bootstrap_fraction,
-				random_state=int(rng.integers(0, 2**31 - 1)),
-			)
-			unique_positions = np.unique(positions)
-			boot_k = max(1, min(effective_k, int(len(unique_positions))))
-			if boot_k < effective_k:
-				reduced_bootstraps += 1
-
-			bootstrap_latent = latent_used[positions]
-			try:
-				boot_kmeans_model = _fit_kmeans_model(
-					bootstrap_latent,
-					n_clusters=boot_k,
+	with mapper_progress(
+		range(bootstrap_count),
+		stage="stability",
+		operation="bootstrap clustering",
+		total=bootstrap_count,
+		unit="bootstrap",
+	) as bootstrap_progress:
+		for bootstrap_index in bootstrap_progress:
+			success = False
+			for attempt in range(5):
+				bootstrap_progress.set_postfix(
+					bootstrap=f"{bootstrap_index + 1}/{bootstrap_count}",
+					attempt=attempt + 1,
+				)
+				positions = _bootstrap_positions(
+					n_used,
+					bootstrap_fraction=bootstrap_fraction,
 					random_state=int(rng.integers(0, 2**31 - 1)),
 				)
-				boot_kmeans_full = boot_kmeans_model.predict(latent_used)
-			except Exception:
-				boot_kmeans_model = None
-				boot_kmeans_full = None
+				unique_positions = np.unique(positions)
+				boot_k = max(1, min(effective_k, int(len(unique_positions))))
+				if boot_k < effective_k:
+					reduced_bootstraps += 1
 
-			try:
-				boot_gmm_model = _fit_gmm_model(
-					bootstrap_latent,
-					n_clusters=boot_k,
-					random_state=int(rng.integers(0, 2**31 - 1)),
-					covariance_type=gmm_covariance_type,
-				)
-				boot_gmm_full = boot_gmm_model.predict(latent_used)
-			except Exception:
-				boot_gmm_model = None
-				boot_gmm_full = None
-
-			if baseline_hdbscan is not None:
+				bootstrap_latent = latent_used[positions]
 				try:
-					boot_hdbscan_model = _fit_hdbscan_model(
+					boot_kmeans_model = _fit_kmeans_model(
 						bootstrap_latent,
-						min_cluster_size=hdbscan_min_cluster_size,
-						min_samples=hdbscan_min_samples,
+						n_clusters=boot_k,
+						random_state=int(rng.integers(0, 2**31 - 1)),
 					)
-					if _hdbscan_is_all_noise(boot_hdbscan_model.labels_):
-						# no defined clusters to project onto; skip approximate_predict entirely
-						hdbscan_degenerate_bootstraps += 1
-						boot_hdbscan_full = None
-					else:
-						boot_hdbscan_full = _predict_hdbscan_labels(boot_hdbscan_model, latent_used)
+					boot_kmeans_full = boot_kmeans_model.predict(latent_used)
 				except Exception:
-					boot_hdbscan_model = None
+					boot_kmeans_model = None
+					boot_kmeans_full = None
+
+				try:
+					boot_gmm_model = _fit_gmm_model(
+						bootstrap_latent,
+						n_clusters=boot_k,
+						random_state=int(rng.integers(0, 2**31 - 1)),
+						covariance_type=gmm_covariance_type,
+					)
+					boot_gmm_full = boot_gmm_model.predict(latent_used)
+				except Exception:
+					boot_gmm_model = None
+					boot_gmm_full = None
+
+				if baseline_hdbscan is not None:
+					try:
+						boot_hdbscan_model = _fit_hdbscan_model(
+							bootstrap_latent,
+							min_cluster_size=hdbscan_min_cluster_size,
+							min_samples=hdbscan_min_samples,
+						)
+						if _hdbscan_is_all_noise(boot_hdbscan_model.labels_):
+							hdbscan_degenerate_bootstraps += 1
+							boot_hdbscan_full = None
+						else:
+							boot_hdbscan_full = _predict_hdbscan_labels(
+								boot_hdbscan_model, latent_used
+							)
+					except Exception:
+						boot_hdbscan_model = None
+						boot_hdbscan_full = None
+				else:
 					boot_hdbscan_full = None
-			else:
-				boot_hdbscan_full = None
 
-			if boot_kmeans_full is None and boot_gmm_full is None and boot_hdbscan_full is None:
+				if (
+					boot_kmeans_full is None
+					and boot_gmm_full is None
+					and boot_hdbscan_full is None
+				):
+					continue
+
+				success = True
+				if boot_kmeans_full is not None:
+					bootstrap_methods_used["kmeans"] += 1
+					score = _pairwise_jaccard(baseline_kmeans, boot_kmeans_full)
+					if score is not None:
+						bootstrap_jaccard_scores["kmeans"].append(score)
+					support = _cluster_best_jaccard(baseline_kmeans, boot_kmeans_full)
+					for cluster_id, cluster_score in support["per_cluster"].items():
+						bootstrap_cluster_support["kmeans"].setdefault(
+							cluster_id, []
+						).append(cluster_score)
+					consensus_inputs.append(boot_kmeans_full)
+
+				if boot_gmm_full is not None:
+					bootstrap_methods_used["gmm"] += 1
+					score = _pairwise_jaccard(baseline_gmm, boot_gmm_full)
+					if score is not None:
+						bootstrap_jaccard_scores["gmm"].append(score)
+					support = _cluster_best_jaccard(baseline_gmm, boot_gmm_full)
+					for cluster_id, cluster_score in support["per_cluster"].items():
+						bootstrap_cluster_support["gmm"].setdefault(
+							cluster_id, []
+						).append(cluster_score)
+					consensus_inputs.append(boot_gmm_full)
+
+				if boot_hdbscan_full is not None and baseline_hdbscan is not None:
+					bootstrap_methods_used["hdbscan"] += 1
+					score = _pairwise_jaccard(baseline_hdbscan, boot_hdbscan_full)
+					if score is not None:
+						bootstrap_jaccard_scores["hdbscan"].append(score)
+					support = _cluster_best_jaccard(
+						baseline_hdbscan, boot_hdbscan_full
+					)
+					for cluster_id, cluster_score in support["per_cluster"].items():
+						bootstrap_cluster_support["hdbscan"].setdefault(
+							cluster_id, []
+						).append(cluster_score)
+					consensus_inputs.append(boot_hdbscan_full)
+
+				break
+			if not success:
 				continue
-
-			success = True
-			if boot_kmeans_full is not None:
-				bootstrap_methods_used["kmeans"] += 1
-				score = _pairwise_jaccard(baseline_kmeans, boot_kmeans_full)
-				if score is not None:
-					bootstrap_jaccard_scores["kmeans"].append(score)
-				support = _cluster_best_jaccard(baseline_kmeans, boot_kmeans_full)
-				for cluster_id, cluster_score in support["per_cluster"].items():
-					bootstrap_cluster_support["kmeans"].setdefault(cluster_id, []).append(cluster_score)
-				consensus_inputs.append(boot_kmeans_full)
-
-			if boot_gmm_full is not None:
-				bootstrap_methods_used["gmm"] += 1
-				score = _pairwise_jaccard(baseline_gmm, boot_gmm_full)
-				if score is not None:
-					bootstrap_jaccard_scores["gmm"].append(score)
-				support = _cluster_best_jaccard(baseline_gmm, boot_gmm_full)
-				for cluster_id, cluster_score in support["per_cluster"].items():
-					bootstrap_cluster_support["gmm"].setdefault(cluster_id, []).append(cluster_score)
-				consensus_inputs.append(boot_gmm_full)
-
-			if boot_hdbscan_full is not None and baseline_hdbscan is not None:
-				bootstrap_methods_used["hdbscan"] += 1
-				score = _pairwise_jaccard(baseline_hdbscan, boot_hdbscan_full)
-				if score is not None:
-					bootstrap_jaccard_scores["hdbscan"].append(score)
-				support = _cluster_best_jaccard(baseline_hdbscan, boot_hdbscan_full)
-				for cluster_id, cluster_score in support["per_cluster"].items():
-					bootstrap_cluster_support["hdbscan"].setdefault(cluster_id, []).append(cluster_score)
-				consensus_inputs.append(boot_hdbscan_full)
-
-			break
-		if not success:
-			continue
 
 	if not consensus_inputs:
 		raise RuntimeError("Bootstrap stability analysis could not produce any partitions")
 
 	coassociation = _coassociation_matrix(consensus_inputs)
-	consensus_labels = _consensus_labels(coassociation, n_clusters=effective_k)
+	with timed_operation("stability", "consensus hierarchical clustering"):
+		consensus_labels = _consensus_labels(coassociation, n_clusters=effective_k)
 
 	reference_agreement = {
 		"kmeans_vs_gmm": {

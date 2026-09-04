@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from Mapper.progress import mapper_progress, timed_operation
+
 
 def _nearest_neighbor_preservation(
     X_ref: np.ndarray,
@@ -47,6 +49,7 @@ def _compute_gap_statistic(
     k_max: int = 10,
     n_references: int = 10,
     random_state: int = 42,
+    progress_stage: str = "clustering",
 ) -> Dict[str, Any]:
     """Tibshirani-style gap statistic for choosing the number of clusters.
 
@@ -92,16 +95,31 @@ def _compute_gap_statistic(
     rng = np.random.default_rng(random_state)
     gaps: List[float] = []
     gap_sds: List[float] = []
-    for k in range(k_min, k_max + 1):
-        observed = _log_within_sum_of_squares(X, k)
-        reference_logs = []
-        for _ in range(n_references):
-            reference = rng.uniform(mins, maxs, size=X.shape)
-            reference_logs.append(_log_within_sum_of_squares(reference, k))
-        gap = float(np.mean(reference_logs)) - observed
-        sd = float(np.std(reference_logs)) * np.sqrt(1.0 + 1.0 / n_references)
-        gaps.append(gap)
-        gap_sds.append(sd)
+    k_values = range(k_min, k_max + 1)
+    total_fits = len(k_values) * (int(n_references) + 1)
+    with mapper_progress(
+        stage=progress_stage,
+        operation="gap-statistic K-means fits",
+        total=total_fits,
+        unit="fit",
+    ) as progress:
+        for k in k_values:
+            observed = _log_within_sum_of_squares(X, k)
+            progress.update(1)
+            progress.set_postfix(k=k, source="observed")
+            reference_logs = []
+            for reference_index in range(n_references):
+                reference = rng.uniform(mins, maxs, size=X.shape)
+                reference_logs.append(_log_within_sum_of_squares(reference, k))
+                progress.update(1)
+                progress.set_postfix(
+                    k=k,
+                    source=f"reference {reference_index + 1}/{n_references}",
+                )
+            gap = float(np.mean(reference_logs)) - observed
+            sd = float(np.std(reference_logs)) * np.sqrt(1.0 + 1.0 / n_references)
+            gaps.append(gap)
+            gap_sds.append(sd)
 
     optimal_k = k_min
     for index in range(len(gaps) - 1):
@@ -177,6 +195,7 @@ def _compute_vendi_per_cluster(
     *,
     max_samples: Optional[int] = 200,
     random_state: int = 42,
+    progress_stage: str = "clustering",
 ) -> Optional[Dict[str, Any]]:
     """Vendi Score V1 within each non-noise cluster (effective latent modes).
 
@@ -193,9 +212,14 @@ def _compute_vendi_per_cluster(
     latent = np.asarray(latent, dtype=np.float64)
     labels = np.asarray(labels)
     scores: Dict[str, float] = {}
-    for cluster_id in np.unique(labels):
-        if int(cluster_id) == -1:
-            continue
+    cluster_ids = [int(value) for value in np.unique(labels) if int(value) != -1]
+    for cluster_id in mapper_progress(
+        cluster_ids,
+        stage=progress_stage,
+        operation="within-cluster Vendi scores",
+        total=len(cluster_ids),
+        unit="cluster",
+    ):
         points = latent[labels == cluster_id]
         if len(points) < 2:
             continue
@@ -204,7 +228,9 @@ def _compute_vendi_per_cluster(
             positions = rng.choice(len(points), size=max_samples, replace=False)
             points = points[positions]
         try:
-            similarity, _kernel = build_rbf_similarity_matrix(points)
+            similarity, _kernel = build_rbf_similarity_matrix(
+                points, progress_stage=progress_stage
+            )
             scores[str(int(cluster_id))] = float(vendi.score_K(similarity, q=1))
         except Exception:
             continue
@@ -230,6 +256,7 @@ def _compute_latent_quality_metrics(
     random_state: int = 42,
     compute_gap: bool = True,
     compute_vendi: bool = True,
+    progress_stage: str = "clustering",
 ) -> Dict[str, Any]:
     from sklearn.manifold import trustworthiness
     from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score, silhouette_score
@@ -312,6 +339,7 @@ def _compute_latent_quality_metrics(
             k_max=gap_k_max,
             n_references=gap_n_references,
             random_state=random_state,
+            progress_stage=progress_stage,
         )
         if compute_gap
         else None
@@ -323,6 +351,7 @@ def _compute_latent_quality_metrics(
             valid_labels,
             max_samples=vendi_max_samples,
             random_state=random_state,
+            progress_stage=progress_stage,
         )
         if compute_vendi
         else None
@@ -342,6 +371,7 @@ def _cluster_latent_embeddings(
     hdbscan_min_samples: Optional[int] = None,
     agglomerative_linkage: str = "ward",
     gmm_covariance_type: str = "full",
+    progress_stage: str = "clustering",
 ) -> tuple[np.ndarray, Optional[np.ndarray]]:
     latent = np.asarray(latent, dtype=np.float64)
     n_samples = latent.shape[0]
@@ -355,7 +385,9 @@ def _cluster_latent_embeddings(
         n_clusters_eff = int(n_clusters or min(8, max(2, int(np.sqrt(n_samples)))))
         n_clusters_eff = max(1, min(n_clusters_eff, n_samples))
         clusterer = KMeans(n_clusters=n_clusters_eff, random_state=random_state, n_init="auto")
-        return clusterer.fit_predict(latent), None
+        with timed_operation(progress_stage, f"K-means fit (k={n_clusters_eff})"):
+            labels = clusterer.fit_predict(latent)
+        return labels, None
 
     if method_normalized == "dbscan":
         from sklearn.cluster import DBSCAN
@@ -373,7 +405,9 @@ def _cluster_latent_embeddings(
             min_cluster_size=hdbscan_min_cluster_size,
             min_samples=hdbscan_min_samples,
         )
-        return clusterer.fit_predict(latent), None
+        with timed_operation(progress_stage, "HDBSCAN fit"):
+            labels = clusterer.fit_predict(latent)
+        return labels, None
 
     if method_normalized in {"gmm", "gaussian_mixture", "gm"}:
         from sklearn.mixture import GaussianMixture
@@ -385,7 +419,9 @@ def _cluster_latent_embeddings(
             covariance_type=gmm_covariance_type,
             random_state=random_state,
         )
-        return clusterer.fit_predict(latent), None
+        with timed_operation(progress_stage, f"GMM fit (k={n_components_eff})"):
+            labels = clusterer.fit_predict(latent)
+        return labels, None
 
     if method_normalized == "agglomerative":
         from scipy.cluster.hierarchy import linkage
@@ -472,11 +508,12 @@ def _gmm_bic(
     if n_samples < 2 or n_components < 1 or n_components > n_samples:
         return None
     try:
-        mixture = GaussianMixture(
-            n_components=n_components,
-            covariance_type=covariance_type,
-            random_state=random_state,
-        ).fit(latent)
+        with timed_operation("clustering", f"GMM BIC fit (k={n_components})"):
+            mixture = GaussianMixture(
+                n_components=n_components,
+                covariance_type=covariance_type,
+                random_state=random_state,
+            ).fit(latent)
         return float(mixture.bic(latent))
     except Exception:
         return None
@@ -525,7 +562,9 @@ def _compute_global_vendi(
         positions = rng.choice(len(latent), size=max_samples, replace=False)
         latent = latent[positions]
     try:
-        similarity, _kernel = build_rbf_similarity_matrix(latent)
+        similarity, _kernel = build_rbf_similarity_matrix(
+            latent, progress_stage="clustering"
+        )
         return float(vendi.score_K(similarity, q=1))
     except Exception:
         return None
@@ -560,7 +599,8 @@ def _compute_vendi_between_clusters(
         return None
     try:
         similarity, _kernel = build_rbf_similarity_matrix(
-            np.asarray(centroids, dtype=np.float64)
+            np.asarray(centroids, dtype=np.float64),
+            progress_stage="clustering",
         )
         vendi_score = float(vendi.score_K(similarity, q=1))
     except Exception:
@@ -660,7 +700,13 @@ def run_cluster_analysis(
     )
 
     metrics_by_k: Dict[str, Any] = {}
-    for candidate in candidates:
+    for candidate in mapper_progress(
+        candidates,
+        stage="clustering",
+        operation="candidate-k sweep",
+        total=len(candidates),
+        unit="candidate",
+    ):
         kmeans_labels_candidate, _ = _cluster_latent_embeddings(
             latent,
             method="kmeans",

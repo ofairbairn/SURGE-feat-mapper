@@ -9,6 +9,8 @@ from typing import Any, Iterable, Optional, Sequence, Union
 import numpy as np
 from sklearn.metrics import pairwise_distances
 
+from Mapper.progress import mapper_progress, timed_operation
+
 QValue = Union[float, str]
 
 DEFAULT_Q_VALUES: tuple[QValue, ...] = (
@@ -39,6 +41,7 @@ def build_rbf_similarity_matrix(
     embeddings: Any,
     *,
     bandwidth: Optional[float] = None,
+    progress_stage: str = "diversity",
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Build a positive-semidefinite RBF kernel on latent embeddings.
 
@@ -47,7 +50,8 @@ def build_rbf_similarity_matrix(
     the Vendi Score.
     """
     Z = _as_embedding_matrix(embeddings)
-    squared_distances = pairwise_distances(Z, metric="sqeuclidean")
+    with timed_operation(progress_stage, "RBF pairwise distances"):
+        squared_distances = pairwise_distances(Z, metric="sqeuclidean")
     positive_squared_distances = squared_distances[squared_distances > 0.0]
 
     selection = "provided"
@@ -90,15 +94,6 @@ def compute_vendi_diversity(
     when the embedding contains more than ``max_samples`` rows.
     """
     Z = _as_embedding_matrix(embeddings)
-    sample_positions = _sample_positions(
-        len(Z), max_samples=max_samples, random_state=random_state
-    )
-    Z_used = Z[sample_positions]
-    similarity, kernel_report = build_rbf_similarity_matrix(
-        Z_used,
-        bandwidth=rbf_bandwidth,
-    )
-
     try:
         from vendi_score import vendi
     except ImportError as exc:  # pragma: no cover - dependency error path
@@ -107,22 +102,43 @@ def compute_vendi_diversity(
             "`pip install vendi-score`."
         ) from exc
 
-    vendi_score = float(vendi.score_K(similarity, q=1))
-    if not np.isfinite(vendi_score):
-        raise ValueError("vendi-score returned a non-finite global score")
-
-    eigenvalues, tolerance = _normalized_kernel_eigenvalues(similarity)
     orders = _normalize_q_values(
         DEFAULT_Q_VALUES if q_values is None else q_values
     )
-    q_profile = []
-    for q in orders:
-        score = (
-            vendi_score
-            if q == 1.0
-            else _effective_diversity_from_eigenvalues(eigenvalues, q)
+    with mapper_progress(
+        stage="diversity",
+        operation="Vendi diversity",
+        total=4 + len(orders),
+        unit="task",
+    ) as progress:
+        sample_positions = _sample_positions(
+            len(Z), max_samples=max_samples, random_state=random_state
         )
-        q_profile.append({"q": _serialize_q(q), "score": float(score)})
+        Z_used = Z[sample_positions]
+        progress.update(1)
+        similarity, kernel_report = build_rbf_similarity_matrix(
+            Z_used,
+            bandwidth=rbf_bandwidth,
+        )
+        progress.update(1)
+
+        with timed_operation("diversity", "global Vendi score"):
+            vendi_score = float(vendi.score_K(similarity, q=1))
+        progress.update(1)
+        if not np.isfinite(vendi_score):
+            raise ValueError("vendi-score returned a non-finite global score")
+
+        eigenvalues, tolerance = _normalized_kernel_eigenvalues(similarity)
+        progress.update(1)
+        q_profile = []
+        for q in orders:
+            score = (
+                vendi_score
+                if q == 1.0
+                else _effective_diversity_from_eigenvalues(eigenvalues, q)
+            )
+            q_profile.append({"q": _serialize_q(q), "score": float(score)})
+            progress.update(1)
 
     report = {
         "method": "vendi_score",
@@ -178,7 +194,13 @@ def plot_vendi_q_profile(
     finite_x: list[float] = []
     finite_y: list[float] = []
     infinity_score: Optional[float] = None
-    for point in profile:
+    for point in mapper_progress(
+        profile,
+        stage="diversity",
+        operation="q-profile plot data",
+        total=len(profile),
+        unit="order",
+    ):
         if str(point["q"]).lower() == "inf":
             infinity_score = float(point["score"])
         else:
@@ -218,7 +240,8 @@ def plot_vendi_q_profile(
 
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=160, bbox_inches="tight")
+    with timed_operation("diversity", "q-profile plot save"):
+        fig.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(fig)
     return path
 
@@ -254,7 +277,8 @@ def _sample_positions(
 def _normalized_kernel_eigenvalues(
     similarity: np.ndarray,
 ) -> tuple[np.ndarray, float]:
-    eigenvalues = np.linalg.eigvalsh(similarity / similarity.shape[0])
+    with timed_operation("diversity", "eigenvalue decomposition"):
+        eigenvalues = np.linalg.eigvalsh(similarity / similarity.shape[0])
     largest_magnitude = float(max(1.0, np.max(np.abs(eigenvalues))))
     tolerance = float(
         max(1e-12, similarity.shape[0] * np.finfo(np.float64).eps * largest_magnitude)

@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
+from Mapper.progress import mapper_progress, timed_operation
+
 
 def _compute_hopkins_statistic(
     latent: np.ndarray,
@@ -67,25 +69,33 @@ def _vat_reordering(latent: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndar
     if n_samples == 1:
         return np.zeros((1, 1), dtype=np.float64), np.array([0], dtype=int), np.array([-1], dtype=int)
 
-    dist_matrix = squareform(pdist(latent, metric="euclidean"))
+    with timed_operation("tendency", "VAT pairwise distances"):
+        dist_matrix = squareform(pdist(latent, metric="euclidean"))
     seed_i, _seed_j = np.unravel_index(np.argmax(dist_matrix), dist_matrix.shape)
     order: List[int] = [int(seed_i)]
     parents: List[int] = [-1]
     remaining = set(range(n_samples))
     remaining.remove(int(seed_i))
 
-    while remaining:
-        current = np.array(order, dtype=int)
-        candidates = np.array(sorted(remaining), dtype=int)
-        candidate_distances = dist_matrix[np.ix_(current, candidates)]
-        min_to_tree = np.min(candidate_distances, axis=0)
-        candidate_choice = int(np.argmin(min_to_tree))
-        next_idx = int(candidates[candidate_choice])
-        parent_in_current = int(np.argmin(candidate_distances[:, candidate_choice]))
-        parent_idx = parent_in_current
-        order.append(next_idx)
-        parents.append(parent_idx)
-        remaining.remove(next_idx)
+    with mapper_progress(
+        stage="tendency",
+        operation="VAT reordering",
+        total=n_samples - 1,
+        unit="sample",
+    ) as progress:
+        while remaining:
+            current = np.array(order, dtype=int)
+            candidates = np.array(sorted(remaining), dtype=int)
+            candidate_distances = dist_matrix[np.ix_(current, candidates)]
+            min_to_tree = np.min(candidate_distances, axis=0)
+            candidate_choice = int(np.argmin(min_to_tree))
+            next_idx = int(candidates[candidate_choice])
+            parent_in_current = int(np.argmin(candidate_distances[:, candidate_choice]))
+            parent_idx = parent_in_current
+            order.append(next_idx)
+            parents.append(parent_idx)
+            remaining.remove(next_idx)
+            progress.update(1)
 
     order_arr = np.asarray(order, dtype=int)
     reordered = dist_matrix[np.ix_(order_arr, order_arr)]
@@ -113,7 +123,13 @@ def _ivat_from_vat(
         adjacency[parent].append((child, weight))
 
     ivat = np.zeros((n_samples, n_samples), dtype=np.float64)
-    for start in range(n_samples):
+    for start in mapper_progress(
+        range(n_samples),
+        stage="tendency",
+        operation="iVAT path distances",
+        total=n_samples,
+        unit="sample",
+    ):
         visited = {start}
         stack: List[tuple[int, float]] = [(start, 0.0)]
         while stack:
@@ -141,11 +157,12 @@ def _summarize_cluster_tendency(
     diagnostics because they are primarily visual assessments.
     """
     latent = np.asarray(latent, dtype=np.float64)
-    hopkins = _compute_hopkins_statistic(
-        latent,
-        sample_size=sample_size,
-        random_state=random_state,
-    )
+    with timed_operation("tendency", "Hopkins statistic"):
+        hopkins = _compute_hopkins_statistic(
+            latent,
+            sample_size=sample_size,
+            random_state=random_state,
+        )
     vat_matrix, vat_order, vat_parents = _vat_reordering(latent)
     ivat_matrix = _ivat_from_vat(vat_matrix, vat_parents)
 
@@ -196,7 +213,8 @@ def save_tendency_heatmap(
     axis.set_ylabel("VAT-reordered sample index")
     fig.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
     fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    with timed_operation("tendency", f"{title} heatmap save"):
+        fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return path
 

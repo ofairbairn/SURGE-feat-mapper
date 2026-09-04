@@ -33,6 +33,7 @@ from Mapper.cluster.cluster import (
     _compute_latent_quality_metrics,
 )
 from Mapper.tendency.tendency import _summarize_cluster_tendency
+from Mapper.progress import mapper_progress, timed_operation
 
 LOG = logging.getLogger(__name__)
 
@@ -508,8 +509,16 @@ def _fit_2d_embeddings(
             n_components=2,
             random_state=random_state,
             n_jobs=1,
+            verbose=True,
+            tqdm_kwds={
+                "desc": "[Mapper visualization] UMAP optimization",
+                "unit": "epoch",
+                "dynamic_ncols": True,
+            },
         )
-        embeddings.append(("umap", np.asarray(reducer.fit_transform(Z), dtype=np.float64)))
+        with timed_operation("visualization", "UMAP fit"):
+            umap_embedding = np.asarray(reducer.fit_transform(Z), dtype=np.float64)
+        embeddings.append(("umap", umap_embedding))
     except ImportError:
         LOG.warning("umap-learn is not installed; skipping UMAP.")
     except Exception as exc:
@@ -531,7 +540,9 @@ def _fit_2d_embeddings(
                 tsne = TSNE(max_iter=1000, **tsne_kwargs)
             except TypeError:
                 tsne = TSNE(n_iter=1000, **tsne_kwargs)
-            embeddings.append(("tsne", np.asarray(tsne.fit_transform(Z), dtype=np.float64)))
+            with timed_operation("visualization", "t-SNE fit"):
+                tsne_embedding = np.asarray(tsne.fit_transform(Z), dtype=np.float64)
+            embeddings.append(("tsne", tsne_embedding))
         except Exception as exc:
             LOG.warning("t-SNE failed: %s", exc)
 
@@ -629,6 +640,7 @@ def _save_embedding(
             embedding,
             cluster_labels,
             n_neighbors=latent_quality_n_neighbors,
+            progress_stage="visualization",
         ),
     }
 
@@ -659,7 +671,14 @@ def _save_embedding(
             cluster_ids.sort()
 
     if embedding_type == "tsne" and cluster_ids:
-        for cluster_number, cluster_id in enumerate(cluster_ids, start=1):
+        cluster_items = list(enumerate(cluster_ids, start=1))
+        for cluster_number, cluster_id in mapper_progress(
+            cluster_items,
+            stage="visualization",
+            operation="t-SNE cluster plots",
+            total=len(cluster_items),
+            unit="plot",
+        ):
             member_mask = member_masks[cluster_id]
             cluster_df = embedding_df.loc[member_mask]
             cluster_scores = (
@@ -722,7 +741,13 @@ def _save_embedding(
             scores,
             score_label,
             palette,
-        ) in umap_variants:
+        ) in mapper_progress(
+            umap_variants,
+            stage="visualization",
+            operation="UMAP plot variants",
+            total=len(umap_variants),
+            unit="plot",
+        ):
             png_path = output_dir / (
                 f"latent_{safe_model_name}_{split}_{embedding_type}_{suffix}.png"
             )
@@ -1065,6 +1090,7 @@ def viz_unsupervised_latent(
                         hdbscan_min_cluster_size=hdbscan_min_cluster_size,
                         hdbscan_min_samples=hdbscan_min_samples,
                         agglomerative_linkage=agglomerative_linkage,
+                        progress_stage="visualization",
                     )
                 except Exception as exc:
                     LOG.warning("Clustering failed for %s %s: %s", model_name, split, exc)
@@ -1089,10 +1115,17 @@ def viz_unsupervised_latent(
                 if not apply_tendency_gate
                 else bool(tendency_summary.get("gate_passed", True))
             )
-            for embedding_type, embedding in _fit_2d_embeddings(
+            fitted_embeddings = _fit_2d_embeddings(
                 Z,
                 random_state=random_state,
                 include_tsne=tsne_allowed,
+            )
+            for embedding_type, embedding in mapper_progress(
+                fitted_embeddings,
+                stage="visualization",
+                operation="embedding artifacts",
+                total=len(fitted_embeddings),
+                unit="embedding",
             ):
                 saved_paths.extend(
                     _save_embedding(
@@ -1166,7 +1199,13 @@ def _reconstruction_diagnostics(
     feature_rmse = np.sqrt(feature_mse)
     feature_corr = []
     feature_r2 = []
-    for i in range(n_cols):
+    for i in mapper_progress(
+        range(n_cols),
+        stage="visualization",
+        operation="reconstruction feature metrics",
+        total=n_cols,
+        unit="feature",
+    ):
         yt = y_true[:, i]
         yp = y_pred[:, i]
         if np.std(yt) > 0 and np.std(yp) > 0:
@@ -1221,7 +1260,14 @@ def _reconstruction_diagnostics(
     # Feature parity plots.
     n_plot = len(top_idx)
     fig, axes = plt.subplots(n_plot, 1, figsize=(7, 3 * n_plot), squeeze=False)
-    for ax, idx in zip(axes.ravel(), top_idx):
+    parity_items = list(zip(axes.ravel(), top_idx))
+    for ax, idx in mapper_progress(
+        parity_items,
+        stage="visualization",
+        operation="reconstruction parity plots",
+        total=len(parity_items),
+        unit="feature",
+    ):
         ax.scatter(y_true[:, idx], y_pred[:, idx], s=10, alpha=0.6)
         lo = min(float(np.min(y_true[:, idx])), float(np.min(y_pred[:, idx])))
         hi = max(float(np.max(y_true[:, idx])), float(np.max(y_pred[:, idx])))
@@ -1238,7 +1284,14 @@ def _reconstruction_diagnostics(
 
     # Residual histograms.
     fig, axes = plt.subplots(n_plot, 1, figsize=(7, 3 * n_plot), squeeze=False)
-    for ax, idx in zip(axes.ravel(), top_idx):
+    histogram_items = list(zip(axes.ravel(), top_idx))
+    for ax, idx in mapper_progress(
+        histogram_items,
+        stage="visualization",
+        operation="residual histograms",
+        total=len(histogram_items),
+        unit="feature",
+    ):
         ax.hist(residual[:, idx], bins=40, alpha=0.8)
         ax.axvline(0.0, linestyle="--", linewidth=1)
         ax.set_title(f"Feature f_{idx:02d} residual histogram")
@@ -1291,7 +1344,14 @@ def _reconstruction_diagnostics(
             panel_n = min(6, worst_n)
             panel_idx = worst_idx[-panel_n:]
             fig, axes = plt.subplots(panel_n, 3, figsize=(9, 2.5 * panel_n), squeeze=False)
-            for row_i, sample_i in enumerate(panel_idx):
+            panel_items = list(enumerate(panel_idx))
+            for row_i, sample_i in mapper_progress(
+                panel_items,
+                stage="visualization",
+                operation="reconstruction image panels",
+                total=len(panel_items),
+                unit="sample",
+            ):
                 orig = y_true[sample_i].reshape(shape)
                 recon = y_pred[sample_i].reshape(shape)
                 diff = np.abs(recon - orig)
@@ -1488,6 +1548,7 @@ def plot_mapper_latent(
                     random_state=random_state,
                     hdbscan_min_cluster_size=hdbscan_min_cluster_size,
                     hdbscan_min_samples=hdbscan_min_samples,
+                    progress_stage="visualization",
                 )
             except Exception as exc:
                 LOG.warning("Clustering for latent plot failed: %s", exc)
@@ -1524,10 +1585,17 @@ def plot_mapper_latent(
         if ivat_png is not None:
             saved_paths.append(str(ivat_png))
 
-    for embedding_type, embedding in _fit_2d_embeddings(
+    fitted_embeddings = _fit_2d_embeddings(
         Z,
         random_state=random_state,
         include_tsne=include_tsne_effective,
+    )
+    for embedding_type, embedding in mapper_progress(
+        fitted_embeddings,
+        stage="visualization",
+        operation="embedding artifacts",
+        total=len(fitted_embeddings),
+        unit="embedding",
     ):
         saved_paths.extend(
             _save_embedding(
@@ -1593,7 +1661,13 @@ def plot_mapper_reconstruction(
 
     n_cols = y_true.shape[1]
     df = pd.DataFrame({"index": np.asarray(sample_indices, dtype=np.int64)})
-    for i in range(n_cols):
+    for i in mapper_progress(
+        range(n_cols),
+        stage="visualization",
+        operation="reconstruction dataframe",
+        total=n_cols,
+        unit="feature",
+    ):
         df[f"y_true_{i:02d}"] = y_true[:, i]
         df[f"y_pred_{i:02d}"] = y_pred[:, i]
 
@@ -1779,7 +1853,8 @@ def plot_mapper_pca(
         ax_var.legend(loc="upper left")
 
     fig.tight_layout()
-    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    with timed_operation("visualization", "PCA plot save"):
+        fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     return {

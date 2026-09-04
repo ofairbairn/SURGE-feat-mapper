@@ -22,6 +22,8 @@ from typing import Any, Dict, Optional, Union
 import numpy as np
 import pandas as pd
 
+from Mapper.progress import mapper_progress
+
 
 def _row_labels(index: pd.Index) -> list:
     """Serialize dataframe index labels into JSON-friendly scalars."""
@@ -107,7 +109,26 @@ def analyze_missingness(
     if not isinstance(df, pd.DataFrame):
         raise TypeError(f"analyze_missingness expects a DataFrame, got {type(df)}")
 
-    missing_counts = df.isnull().sum()
+    with mapper_progress(
+        stage="preprocess",
+        operation="missingness analysis",
+        total=3,
+        unit="task",
+    ) as progress:
+        missing_mask = df.isnull()
+        missing_counts = missing_mask.sum()
+        progress.update(1)
+
+        n_missing_rows = int(missing_mask.any(axis=1).sum())
+        progress.update(1)
+
+        missing_indices = {
+            str(column): _row_labels(df.index[missing_mask[column]])
+            for column in df.columns
+            if int(missing_counts[column]) > 0
+        }
+        progress.update(1)
+
     detected_columns = {
         str(col): int(count)
         for col, count in missing_counts.items()
@@ -119,7 +140,6 @@ def analyze_missingness(
     n_columns = int(df.shape[1])
     n_cells_total = n_rows * n_columns
     n_missing_cells = int(missing_counts.sum())
-    n_missing_rows = int(df.isnull().any(axis=1).sum())
     completeness_percent = (
         (n_cells_total - n_missing_cells) / n_cells_total * 100
         if n_cells_total
@@ -150,17 +170,21 @@ def analyze_missingness(
     }
 
     if missing_values_detected:
-        report["missing_indices"] = {
-            column: _row_labels(df.index[df[column].isnull()])
-            for column in detected_columns
-        }
+        report["missing_indices"] = missing_indices
 
     report["plots"] = {}
     report["plot_errors"] = {}
-    if save_plots and output_dir is not None:
+    if save_plots and output_dir is not None and missing_values_detected:
         plot_dir = Path(output_dir)
         plot_dir.mkdir(parents=True, exist_ok=True)
-        for kind in ("matrix", "bar"):
+        plot_kinds = ("matrix", "bar")
+        for kind in mapper_progress(
+            plot_kinds,
+            stage="preprocess",
+            operation="missingness plots",
+            total=len(plot_kinds),
+            unit="plot",
+        ):
             # Re-enable "heatmap" here with its branch above when the
             # missingness correlation diagnostic returns to the workflow.
             try:
