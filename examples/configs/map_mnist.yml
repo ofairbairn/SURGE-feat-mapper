@@ -51,6 +51,22 @@ workflow:
   mapper_visualization:
     enabled: true
     random_state: 42
+  # Opt-in. Persists a reference-anchor subsample (align/reference_anchors.npz)
+  # so a later run can stay comparable to this one. mode:
+  #   skip          (default) just save this run's anchors for future use.
+  #   reuse_encoder load reference_run's saved encoder verbatim and skip
+  #                 training -- the latent space is already identical, no
+  #                 Procrustes needed.
+  #   realign       train a new encoder as usual, then Procrustes-align its
+  #                 latents onto reference_run's anchors (scipy.spatial's
+  #                 rotation/reflection/scale convention) so cluster
+  #                 identities and Atlas positions survive the retrain.
+  # mapper_align:
+  #   enabled: true
+  #   mode: skip
+  #   reference_run: runs/mnist_mapper_20260101-000000
+  #   n_anchor: 500
+  #   random_state: 42
 
   models:
     - key: sklearn.pca

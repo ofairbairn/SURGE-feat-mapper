@@ -28,6 +28,14 @@ from surge.model.registry import MODEL_REGISTRY
 from surge.utils import posix_str
 from surge.workflow.spec import ModelConfig, SurrogateWorkflowSpec
 
+from .align import (
+    apply_procrustes_alignment,
+    fit_procrustes_alignment,
+    load_reference_anchors,
+    save_procrustes_alignment,
+    save_reference_anchors,
+    select_anchor_positions,
+)
 from .cluster import run_cluster_analysis
 from .preprocess import DataScaler, ImageDataScaler, analyze_missingness
 from .progress import mapper_progress
@@ -83,6 +91,8 @@ _CONV_MODEL_ALIASES = {
 }
 _PIXEL_COLUMN_PATTERN = re.compile(r"^pixel[_-]?(\d+)$", re.IGNORECASE)
 _DEFAULT_MAX_RECON_RMSE = 0.10
+_ALIGN_MODES = {"skip", "reuse_encoder", "realign"}
+_DEFAULT_N_ANCHOR = 500
 
 
 def run_mapper_workflow(
@@ -243,38 +253,85 @@ def run_mapper_workflow(
         spec_source = invocation.get("spec_path")
         if spec_source:
             copy_invoked_config_source(paths, Path(spec_source))
+
+    ###ALIGN MODULE CONFIG (read before the ladder: reuse_encoder short-circuits it)###
+    align_config = dict(spec.mapper_align)
+    align_enabled = bool(align_config.get("enabled", False))
+    align_mode = str(align_config.get("mode", "skip")).strip().lower() if align_enabled else "skip"
+    if align_mode not in _ALIGN_MODES:
+        raise ValueError(
+            f"mapper_align.mode must be one of {sorted(_ALIGN_MODES)}, got {align_mode!r}"
+        )
+    reference_run_dir = align_config.get("reference_run") if align_enabled else None
+    if align_mode in {"reuse_encoder", "realign"} and not reference_run_dir:
+        raise ValueError(
+            f"mapper_align.mode={align_mode!r} requires mapper_align.reference_run "
+            "to point at a prior Mapper run directory (its runs/<run_tag> folder)"
+        )
+    reference_run_path = Path(reference_run_dir) if reference_run_dir else None
+    align_report: Optional[Dict[str, Any]] = {"mode": align_mode} if align_enabled else None
+    align_artifacts: Dict[str, str] = {}
+
+    reused_rung: Optional[str] = None
+    reused_adapter: Any = None
+    if align_mode == "reuse_encoder":
+        reused_rung, reused_adapter, reference_summary = _load_reference_encoder(
+            reference_run_path
+        )
+        reference_columns = reference_summary.get("input_columns")
+        if reference_columns is not None and list(reference_columns) != list(
+            dataset.input_columns
+        ):
+            raise ValueError(
+                "mapper_align.mode='reuse_encoder' requires the same input "
+                f"columns as the reference run ({reference_run_path}); got "
+                f"{list(dataset.input_columns)} vs {list(reference_columns)}"
+            )
+        align_report["reference_run"] = posix_str(reference_run_path)
+        align_report["reused_rung"] = reused_rung
+        print(
+            f"[Mapper align] reuse_encoder: loaded {reused_rung.upper()} encoder "
+            f"from {posix_str(reference_run_path)}",
+            flush=True,
+        )
+
         ###REPRESENTATION STEPS###
     ladder_results = []
     rung_adapters: Dict[str, Any] = {}
     selected_adapter = None
     selected_rung = None
     selected_quality_sufficient = False
-    for rung in _LADDER_RUNGS:
+    ladder_rungs_to_run = (reused_rung,) if reused_rung is not None else _LADDER_RUNGS
+    for rung in ladder_rungs_to_run:
         model_key, model_name, model_params = _resolve_ladder_model(
             spec,
             rung,
             input_layout=input_layout,
         )
-        adapter = MODEL_REGISTRY.create(model_key, **model_params)
-        if hasattr(adapter, "prepare_for_fit"):
-            adapter.prepare_for_fit(
-                resources=spec.resources,
-                X_shape=X_train.shape,
-                y_shape=X_train.shape,
-            )
-
-        fit_start = time.perf_counter()
-        if rung == "pca":
-            adapter.fit(X_train, X_train)
+        if reused_rung is not None:
+            adapter = reused_adapter
+            fit_seconds = 0.0
         else:
-            adapter.fit(
-                X_train,
-                X_train,
-                X_val=X_val,
-                y_val=X_val,
-            )
-        adapter.mark_fitted()
-        fit_seconds = float(time.perf_counter() - fit_start)
+            adapter = MODEL_REGISTRY.create(model_key, **model_params)
+            if hasattr(adapter, "prepare_for_fit"):
+                adapter.prepare_for_fit(
+                    resources=spec.resources,
+                    X_shape=X_train.shape,
+                    y_shape=X_train.shape,
+                )
+
+            fit_start = time.perf_counter()
+            if rung == "pca":
+                adapter.fit(X_train, X_train)
+            else:
+                adapter.fit(
+                    X_train,
+                    X_train,
+                    X_val=X_val,
+                    y_val=X_val,
+                )
+            adapter.mark_fitted()
+            fit_seconds = float(time.perf_counter() - fit_start)
         rung_adapters[rung] = adapter
 
         split_metrics = {
@@ -317,10 +374,13 @@ def run_mapper_workflow(
             "quality_gate": gate,
             "artifacts": rung_artifacts,
         }
+        if reused_rung is not None:
+            rung_result["reused_from_reference_run"] = posix_str(reference_run_path)
         ladder_results.append(rung_result)
         gate_outcome = (
             "PASS"
             if gate["passed"]
+            else "REUSED" if reused_rung is not None
             else "EXHAUSTED" if rung == _LADDER_RUNGS[-1] else "CLIMB"
         )
         print(
@@ -350,7 +410,8 @@ def run_mapper_workflow(
         )
 
     ladder_exhausted = (
-        bool(ladder_results)
+        reused_rung is None
+        and bool(ladder_results)
         and ladder_results[-1]["rung"] == _LADDER_RUNGS[-1]
         and not selected_quality_sufficient
     )
@@ -404,6 +465,97 @@ def run_mapper_workflow(
         raw.val_index,
         raw.test_index,
     )
+
+    ###ALIGN MODULE STEP (Procrustes realignment against a reference run)###
+    if align_enabled:
+        align_dir = paths.root / "align"
+        align_dir.mkdir(parents=True, exist_ok=True)
+        X_all_raw, _raw_indices = _combine_generic_splits(
+            raw.X_train,
+            raw.X_val,
+            raw.X_test,
+            raw.train_index,
+            raw.val_index,
+            raw.test_index,
+        )
+        if align_mode == "realign":
+            reference_anchor_path = (
+                reference_run_path / "align" / "reference_anchors.npz"
+            )
+            if not reference_anchor_path.is_file():
+                raise FileNotFoundError(
+                    "mapper_align.mode='realign' requires a saved reference "
+                    f"anchor artifact at {reference_anchor_path}; run the "
+                    "reference workflow with mapper_align.enabled=true first"
+                )
+            reference_anchors = load_reference_anchors(reference_anchor_path)
+            if list(reference_anchors["input_columns"]) != list(
+                dataset.input_columns
+            ):
+                raise ValueError(
+                    "mapper_align.mode='realign' requires the same input "
+                    f"columns as the reference run ({reference_anchor_path}); "
+                    f"got {list(dataset.input_columns)} vs "
+                    f"{list(reference_anchors['input_columns'])}"
+                )
+            anchor_scaled = scaler.transform(reference_anchors["X_raw_anchor"])
+            anchor_new_latent = np.asarray(selected_adapter.encode(anchor_scaled))
+            alignment = fit_procrustes_alignment(
+                anchor_reference=reference_anchors["Z_anchor"],
+                anchor_new=anchor_new_latent,
+            )
+            Z_all = apply_procrustes_alignment(Z_all, alignment)
+
+            alignment_path = save_procrustes_alignment(
+                align_dir / "procrustes_alignment.npz", alignment
+            )
+            align_report.update(
+                {
+                    "reference_run": posix_str(reference_run_path),
+                    "n_anchor": alignment["n_anchor"],
+                    "latent_dim": alignment["latent_dim"],
+                    "scale": alignment["scale"],
+                    "reflection": alignment["reflection"],
+                    "disparity": alignment["disparity"],
+                    "anchor_rmse": alignment["anchor_rmse"],
+                }
+            )
+            align_artifacts["transform"] = posix_str(alignment_path)
+            print(
+                "[Mapper align] realign: reference_run="
+                f"{posix_str(reference_run_path)}, "
+                f"n_anchor={alignment['n_anchor']}, "
+                f"anchor_rmse={alignment['anchor_rmse']:.6f}, "
+                f"reflection={alignment['reflection']}",
+                flush=True,
+            )
+
+        n_anchor = int(align_config.get("n_anchor", _DEFAULT_N_ANCHOR))
+        anchor_random_state = int(align_config.get("random_state", spec.seed))
+        anchor_positions = select_anchor_positions(
+            len(Z_all), n_anchor=n_anchor, random_state=anchor_random_state
+        )
+        anchor_artifact_path = save_reference_anchors(
+            align_dir / "reference_anchors.npz",
+            sample_index=all_indices[anchor_positions],
+            X_raw_anchor=X_all_raw[anchor_positions],
+            Z_anchor=Z_all[anchor_positions],
+            selected_rung=selected_rung,
+            input_columns=dataset.input_columns,
+        )
+        align_artifacts["reference_anchors"] = posix_str(anchor_artifact_path)
+        align_report["n_anchor_saved"] = int(len(anchor_positions))
+        align_report["status"] = "complete"
+        align_report_path = align_dir / "procrustes_alignment_report.json"
+        with align_report_path.open("w", encoding="utf-8") as handle:
+            json.dump(align_report, handle, indent=2)
+        align_artifacts["report"] = posix_str(align_report_path)
+        print(
+            f"[Mapper align] saved {len(anchor_positions)} reference anchors -> "
+            f"{posix_str(anchor_artifact_path)}",
+            flush=True,
+        )
+
         ###DIVERSITY MODULE STEP###
     diversity_report: Optional[Dict[str, Any]] = None
     diversity_artifacts: Dict[str, str] = {}
@@ -910,6 +1062,8 @@ def run_mapper_workflow(
         metrics_payload["stability"] = stability_report
     if anomaly_report is not None:
         metrics_payload["anomaly"] = anomaly_report
+    if align_report is not None:
+        metrics_payload["align"] = align_report
     save_metrics(metrics_payload, paths)
 
     split_sizes = {
@@ -956,6 +1110,7 @@ def run_mapper_workflow(
         ),
         "stability": stability_report,
         "anomaly": anomaly_report,
+        "align": align_report,
         "next_stage": (
             None
             if clustering_report is not None
@@ -977,6 +1132,7 @@ def run_mapper_workflow(
             "clustering": clustering_artifacts,
             "stability": stability_artifacts,
             "anomaly": anomaly_artifacts,
+            "align": align_artifacts,
             "visualization": viz_artifacts,
             "spec": posix_str(paths.spec_file),
             "summary": posix_str(paths.summary_file),
@@ -1092,6 +1248,29 @@ def _compute_reconstruction_payload(
     }
 
 
+def _combine_generic_splits(
+    train: np.ndarray,
+    val: np.ndarray,
+    test: Optional[np.ndarray],
+    train_index: np.ndarray,
+    val_index: np.ndarray,
+    test_index: Optional[np.ndarray],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Combine train/val/test arrays sharing dataset row indices, in row order."""
+    parts = [train, val]
+    indices = [np.asarray(train_index), np.asarray(val_index)]
+    if test is not None and test_index is not None:
+        parts.append(test)
+        indices.append(np.asarray(test_index))
+    combined = np.vstack(parts)
+    all_indices = np.concatenate(indices)
+    try:
+        order = np.argsort(all_indices)
+    except TypeError:
+        order = np.argsort(all_indices.astype(str))
+    return combined[order], all_indices[order]
+
+
 def _combine_latent_splits(
     Z_train: np.ndarray,
     Z_val: np.ndarray,
@@ -1101,18 +1280,68 @@ def _combine_latent_splits(
     test_index: Optional[np.ndarray],
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Combine selected-model embeddings in original dataset row order."""
-    embeddings = [Z_train, Z_val]
-    indices = [np.asarray(train_index), np.asarray(val_index)]
-    if Z_test is not None and test_index is not None:
-        embeddings.append(Z_test)
-        indices.append(np.asarray(test_index))
-    Z_all = np.vstack(embeddings)
-    all_indices = np.concatenate(indices)
-    try:
-        order = np.argsort(all_indices)
-    except TypeError:
-        order = np.argsort(all_indices.astype(str))
-    return Z_all[order], all_indices[order]
+    return _combine_generic_splits(
+        Z_train, Z_val, Z_test, train_index, val_index, test_index
+    )
+
+
+def _load_reference_encoder(reference_run_path: Path) -> Tuple[str, Any, Dict[str, Any]]:
+    """Load a prior Mapper run's selected encoder adapter for reuse.
+
+    Model adapters persist via an instance-method ``save``/``load`` contract
+    (see e.g. ``surge/model/backends/pca.py``): ``save`` writes a config +
+    fitted-state payload, and a *freshly constructed* adapter's ``load``
+    reads it back in. So reuse means rebuilding the same adapter shell from
+    the reference run's own recorded ``model_key``/``params`` and loading
+    the saved weights into it -- not deserializing the file on its own.
+
+    Returns ``(selected_rung, adapter, reference_summary)`` so callers can
+    both encode new data and validate the reference run's input schema.
+    """
+    summary_path = reference_run_path / "workflow_summary.json"
+    if not summary_path.is_file():
+        raise FileNotFoundError(
+            "mapper_align reference_run has no workflow_summary.json: "
+            f"{reference_run_path}"
+        )
+    with summary_path.open("r", encoding="utf-8") as handle:
+        reference_summary = json.load(handle)
+    ladder = reference_summary.get("representation_ladder", {})
+    selected_rung = ladder.get("selected_rung")
+    if not selected_rung:
+        raise ValueError(
+            "Reference run summary is missing representation_ladder."
+            f"selected_rung: {summary_path}"
+        )
+    rung_entry = next(
+        (
+            entry
+            for entry in ladder.get("rungs_run", [])
+            if entry.get("rung") == selected_rung
+        ),
+        None,
+    )
+    if rung_entry is None or not rung_entry.get("model_key"):
+        raise ValueError(
+            "Reference run summary is missing a rungs_run entry with "
+            f"model_key for selected_rung={selected_rung!r}: {summary_path}"
+        )
+    model_key = str(rung_entry["model_key"])
+    model_params = dict(rung_entry.get("params") or {})
+
+    model_path = reference_run_path / "models" / f"mapper_{selected_rung}.joblib"
+    if not model_path.is_file():
+        raise FileNotFoundError(
+            f"Reference run is missing its saved encoder: {model_path}"
+        )
+    adapter = MODEL_REGISTRY.create(model_key, **model_params)
+    adapter.load(str(model_path))
+    if not hasattr(adapter, "encode"):
+        raise TypeError(
+            f"Reference encoder {model_key!r} does not implement encode(); "
+            "cannot reuse it for Mapper alignment"
+        )
+    return str(selected_rung), adapter, reference_summary
 
 
 def _subsample_positions(

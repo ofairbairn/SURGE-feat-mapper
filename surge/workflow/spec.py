@@ -102,6 +102,12 @@ class SurrogateWorkflowSpec:
     # Missing-value detection, missingno plots, and MCAR testing on the raw
     # Mapper input data (before the engine drops NaN rows).
     mapper_preprocess: Dict[str, Any] = field(default_factory=dict)
+    # Reference-anchor persistence and Procrustes alignment of the Latent
+    # Atlas across encoder retrains. mode: "skip" (default; just persists
+    # this run's anchors for future reference) | "reuse_encoder" (load a
+    # prior run's encoder verbatim, no alignment needed) | "realign" (train
+    # a new encoder, then Procrustes-align it onto reference_run's anchors).
+    mapper_align: Dict[str, Any] = field(default_factory=dict)
     # HDF5 leaf name under run*/sparc_* (default: sdata_pertfields_grid_complex_v2.h5).
     # Use sdata_complex_v2.h5 on CFS-style trees where that file holds nonsymmetric δp modes.
     batch_dir_filename: Optional[str] = None
