@@ -171,10 +171,15 @@ def run_mapper_workflow(
         if input_layout["data_type"] == "image"
         else DataScaler()
     )
+    scaling_operation = (
+        "image scaler"
+        if input_layout["data_type"] == "image"
+        else "robust scaler"
+    )
     scaling_steps = 2 + int(raw.X_test is not None)
     with mapper_progress(
         stage="preprocess",
-        operation="robust scaling",
+        operation=scaling_operation,
         total=scaling_steps,
         unit="split",
     ) as scaling_progress:
