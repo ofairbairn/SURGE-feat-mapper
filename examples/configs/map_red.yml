@@ -11,9 +11,9 @@ workflow:
   overwrite_existing_run: false
   # Mapper ladder gate keys (val RMSE).
   unsupervised_ladder_thresholds:
-    pca_max_recon_rmse: 0.15
-    ae_max_recon_rmse: 0.18
-    vae_max_recon_rmse: 0.20
+    pca_max_recon_rmse: 0.10
+    ae_max_recon_rmse: 0.10
+    vae_max_recon_rmse: 0.10
   mapper_diversity:
     enabled: true
     kernel: rbf
@@ -62,7 +62,13 @@ workflow:
   mapper_visualization:
     enabled: true
     random_state: 42
-
+  mapper_align:
+    enabled: true
+    mode: realign
+    reference_run: runs/white_wine
+    n_anchor: 500
+    random_state: 42
+  
   models:
     - key: sklearn.pca
       name: PCA
