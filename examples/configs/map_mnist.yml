@@ -37,7 +37,7 @@ workflow:
   mapper_clustering:
     enabled: true
     k_anchor: null
-    k_max: 10
+    k_max: 20
     k_window: 1
     gap_k_max: 8
     gap_n_references: 5
