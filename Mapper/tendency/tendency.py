@@ -14,6 +14,26 @@ import numpy as np
 from Mapper.progress import mapper_progress, timed_operation
 
 
+def get_hopkins_m(
+    n: int,
+    max_samples: int = 50,
+    min_samples: int = 10,
+) -> int:
+    """Return a bounded sample size for the Hopkins statistic.
+
+    The sample size is 10% of the dataset (rounded to the nearest integer),
+    with a minimum for statistical usefulness and a fixed upper ceiling to
+    bound runtime and memory use.  For small datasets, the result is reduced
+    as needed so that it is always strictly less than ``n``.
+    """
+    if n <= 1:
+        return 1
+
+    m_10_percent = int(round(0.10 * n))
+    m = max(min_samples, min(max_samples, m_10_percent))
+    return min(m, max(1, n - 1))
+
+
 def _compute_hopkins_statistic(
     latent: np.ndarray,
     *,
@@ -39,8 +59,10 @@ def _compute_hopkins_statistic(
     if np.allclose(mins, maxs):
         return None
 
-    m = int(sample_size or min(max(10, n_samples // 10), 256))
-    m = max(1, min(m, n_samples - 1))
+    if sample_size is None:
+        m = get_hopkins_m(n_samples)
+    else:
+        m = max(1, min(int(sample_size), n_samples - 1))
 
     rng = np.random.default_rng(random_state)
     real_idx = rng.choice(n_samples, size=m, replace=False)
@@ -224,5 +246,6 @@ __all__ = [
     "_ivat_from_vat",
     "_summarize_cluster_tendency",
     "_vat_reordering",
+    "get_hopkins_m",
     "save_tendency_heatmap",
 ]

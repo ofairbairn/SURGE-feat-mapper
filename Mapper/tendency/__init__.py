@@ -5,6 +5,7 @@ from .tendency import (
     _ivat_from_vat,
     _summarize_cluster_tendency,
     _vat_reordering,
+    get_hopkins_m,
     save_tendency_heatmap,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "_ivat_from_vat",
     "_summarize_cluster_tendency",
     "_vat_reordering",
+    "get_hopkins_m",
     "save_tendency_heatmap",
 ]
