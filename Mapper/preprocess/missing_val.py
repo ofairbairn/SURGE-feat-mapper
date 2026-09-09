@@ -38,6 +38,21 @@ def _row_labels(index: pd.Index) -> list:
     return labels
 
 
+_BAR_MAX_LABELS = 10
+# missingno.bar's own default: horizontal ("left") beyond 50 columns, vertical
+# ("bottom", the pandas default) at or below it. Matched here so our tick
+# trimming targets whichever axis actually holds the column labels.
+_BAR_HORIZONTAL_THRESHOLD = 50
+
+
+def _evenly_spaced_positions(n: int, max_labels: int) -> list:
+    """Up to ``max_labels`` indices spread as evenly as possible over ``n``."""
+    if n <= max_labels:
+        return list(range(n))
+    positions = np.linspace(0, n - 1, max_labels).round().astype(int)
+    return sorted(set(int(position) for position in positions))
+
+
 def _save_missingno_plot(
     kind: str,
     df: pd.DataFrame,
@@ -63,6 +78,9 @@ def _save_missingno_plot(
         fig, ax = plt.subplots(figsize=(14.0, 6.0))
         msno.matrix(missing_df, ax=ax, sparkline=False, fontsize=8)
         ax.set_title("nullity matrix")
+        ax.set_xlabel("column")
+        ax.xaxis.set_label_position("top")
+        ax.set_ylabel("sample index")
     # elif kind == "heatmap":
     #     path = output_dir / "missingno_heatmap.png"
     #     fig, ax = plt.subplots(figsize=(10.0, 8.0))
@@ -71,8 +89,46 @@ def _save_missingno_plot(
     elif kind == "bar":
         path = output_dir / "missingno_bar.png"
         fig, ax = plt.subplots(figsize=(14.0, 6.0))
-        msno.bar(missing_df, ax=ax, fontsize=8)
+        existing_axes = set(fig.axes)
+        horizontal = missing_df.shape[1] > _BAR_HORIZONTAL_THRESHOLD
+        msno.bar(
+            missing_df,
+            ax=ax,
+            fontsize=8,
+            orientation="left" if horizontal else "bottom",
+        )
         ax.set_title("bar chart of completeness")
+        twin_axes = [twin for twin in fig.axes if twin not in existing_axes]
+        column_names = list(missing_df.columns)
+        positions = _evenly_spaced_positions(len(column_names), _BAR_MAX_LABELS)
+        nullity_counts = len(missing_df) - missing_df.isnull().sum()
+        if horizontal:
+            ax.set_yticks(positions)
+            ax.set_yticklabels([column_names[p] for p in positions], fontsize=8)
+            ax.set_xlabel("fraction of non-missing values")
+            ax.set_ylabel("column")
+            if twin_axes:
+                right_axis = twin_axes[0]
+                right_axis.set_yticks(positions)
+                right_axis.set_yticklabels(
+                    [int(nullity_counts.iloc[p]) for p in positions], fontsize=8
+                )
+        else:
+            ax.set_xticks(positions)
+            ax.set_xticklabels(
+                [column_names[p] for p in positions],
+                rotation=45,
+                ha="right",
+                fontsize=8,
+            )
+            ax.set_xlabel("column")
+            ax.set_ylabel("fraction of non-missing values")
+            if len(twin_axes) >= 2:
+                top_axis = twin_axes[1]
+                top_axis.set_xticks(positions)
+                top_axis.set_xticklabels(
+                    [int(nullity_counts.iloc[p]) for p in positions], fontsize=8
+                )
     else:
         raise ValueError(f"Unsupported missingno plot kind: {kind!r}")
 

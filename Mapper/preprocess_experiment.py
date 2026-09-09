@@ -5,7 +5,7 @@ Check equilibrium data for missingness
 from pathlib import Path
 
 import pandas as pd
-from .preprocess import analyze_missingness
+from Mapper.preprocess import analyze_missingness
 
 def check_missingness(file_path: str, output_dir: str = "runs/preprocess_experiment"):
     df = pd.read_csv(file_path)
