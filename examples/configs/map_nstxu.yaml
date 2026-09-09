@@ -1,6 +1,6 @@
 workflow:
   workflow_type: mapper
-  dataset_path: "C:\\Users\\Bipo1\\Downloads\\New equilibrium dataset\\new_equilibrium_data.csv"
+  dataset_path: "C:\\Users\\Bipo1\\Downloads\\New equilibrium dataset\\new_trimmed_eq_data.csv"
   dataset_format: auto
   # dataset_source: M3D-C1 batch-dir loading ("m3dc1_batch" / "m3dc1_batch_per_mode")
   # is not wired up for workflow_type=mapper yet -- leave null for a CSV/parquet path.
@@ -16,13 +16,13 @@ workflow:
   # Excludes non-numeric/flag columns from Mapper's reconstruction inputs;
   # "outputs" here just means "not a scaled input" for this unsupervised run.
   metadata_overrides:
-    outputs: [plasma_configuration, Converged, Diverted]
+    outputs: [plasma_configuration, Converged, Diverted] #get rid of bool and str data types to avoid crashing mapper
   # Mapper input-layout hints. "auto" infers from metadata/column names;
   # image data additionally needs input_shape as (C, H, W).
   data_type: tabular
   input_shape: null
   output_dir: .
-  run_tag: nstx_u_equil_data
+  run_tag: nstx_trimmed
   overwrite_existing_run: false
   # Mapper ladder gate keys (val RMSE). Rungs always run PCA -> AE -> VAE in
   # that fixed order; the first rung meeting its threshold is selected.
@@ -145,7 +145,7 @@ workflow:
       name: Autoencoder
       params:
         latent_dim: 8
-        hidden_dims: [128, 64, 32, 16, 8]
+        hidden_dims: [128, 64, 32]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001
@@ -155,7 +155,7 @@ workflow:
       name: VAE
       params:
         latent_dim: 8
-        hidden_dims: [128, 64, 32, 16, 8]
+        hidden_dims: [128, 64, 32]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001

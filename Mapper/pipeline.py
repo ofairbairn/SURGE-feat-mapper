@@ -1138,6 +1138,13 @@ def run_mapper_workflow(
     )
     if clustering_report is not None:
         status = _mapper_status_after_clustering(clustering_report)
+    # missing_indices can be huge (one row-index list per missing column); the
+    # full report already lives in preprocessing/data_preprocessing.json.
+    preprocessing_summary = (
+        {key: value for key, value in preprocessing_report.items() if key != "missing_indices"}
+        if preprocessing_report is not None
+        else None
+    )
     summary: Dict[str, Any] = {
         "workflow_type": "mapper",
         "status": status,
@@ -1146,7 +1153,7 @@ def run_mapper_workflow(
         "input_columns": list(dataset.input_columns),
         "split_sizes": split_sizes,
         "scaling": _scaling_summary(scaler),
-        "preprocessing": preprocessing_report,
+        "preprocessing": preprocessing_summary,
         "representation_ladder": {
             "order": list(_LADDER_RUNGS),
             "gate_split": "val",

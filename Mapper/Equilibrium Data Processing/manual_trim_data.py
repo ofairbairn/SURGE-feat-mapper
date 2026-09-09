@@ -17,3 +17,11 @@ empty_cols = eq_data.columns[eq_data.isna().all()].tolist()
 new_eq = eq_data.drop(empty_cols, axis=1)
 output_dir = Path("C:\\Users\\Bipo1\\Downloads\\New equilibrium dataset")
 new_eq.to_csv(output_dir / "new_equilibrium_data.csv", na_rep="", index=False)
+
+# The sparse probe columns are only populated for the last 1000 rows
+# (index 9000-9999); keep just that dense block so Mapper's dropna doesn't
+# gut the dataset.
+new_eq_trimmed = new_eq.tail(1000).copy()
+print(f"trimmed shape: {new_eq_trimmed.shape}, remaining NaNs: {int(new_eq_trimmed.isna().sum().sum())}")
+new_eq_trimmed.to_csv(output_dir / "new_trimmed_eq_data.csv", na_rep="", index=False)
+
