@@ -1,0 +1,122 @@
+Yes, tracking feature contributions back to the raw inputs is completely achievable, but the exact method depends on whether the representation model is linear (PCA) or non-linear (AE/VAE).
+
+**1. Linear Representations (PCA): Direct Inspection via Loadings**
+PCA provides an exact, explicit mathematical recipe linking raw features to latent components.
+
+* **How it works:** The PCA components matrix (often called the *loadings matrix*) contains the exact weight $w$ assigned to every input column.
+* **The math:** A latent component $x$ is literally expressed as:
+
+$$x = w_a \cdot a + w_b \cdot b + w_c \cdot c + w_d \cdot d$$
+
+
+* **In Practice:** You inspect `pca.components_`. If feature $a$ has a weight of $0.85$, feature $b$ has $0.40$, and $c$ and $d$ are near $0$, you can report directly that latent feature $x$ is primarily driven by original variables $a$ and $b$.
+
+---
+
+**2. Non-Linear Representations (AE / VAE): Feature Attribution & Gradients**
+Neural networks do not produce a static weight formula due to non-linear activation functions. Instead, you use feature attribution techniques to calculate input importance.
+
+* **Encoder Gradients / Jacobians ($\frac{\partial z}{\partial x}$):** Compute the partial derivative of a specific latent dimension $y$ with respect to each input feature. A large absolute gradient magnitude means a small tweak to feature $a$ heavily shifts latent coordinate $y$.
+* **Integrated Gradients or SHAP:** Standard interpretability tools that pass your encoder to an explainer (e.g., `shap.DeepExplainer`). It assigns an attribution score to features $a, b, c, d$ for every sample, quantifying how much each raw column pushed that point to its specific location in latent dimension $y$.
+
+---
+
+**3. The Scientist-Centric Approach: Decoder Latent Traversals**
+Rather than analyzing the encoder, turn to the decoder. Scientists care about what a latent dimension represents in physical terms.
+
+* **How it works:** Hold all latent dimensions constant at their mean except $y$. Sweep $y$ from its minimum to maximum value across a grid, pass those synthetic latent vectors through the decoder $\hat{x} = \text{Decoder}(z)$, and observe which original variables ($a, b, c, d$) change in response.
+* **Result:** You can generate a simple line plot showing: *"As latent coordinate $y$ increases, original physical feature $a$ scales up sharply while feature $b$ stays flat."*
+
+---
+
+**Implementation Tip for Mapper**
+Store your raw DataFrame's column names (`feature_names = ['a', 'b', 'c', 'd']`) inside your `Represent` pipeline object. When Mapper outputs its final report or Latent Atlas, attach the top 3 highest-contributing features (derived from PCA loadings or average absolute encoder gradients) alongside each latent axis.
+**How SHAP Explains ML Outputs and Feature Extraction**
+
+Shapley Additive exPlanations (SHAP) allocates a model's prediction among its input features using cooperative game theory. It calculates the marginal contribution of each original variable across all possible feature combinations, providing mathematically rigorous feature attributions.
+
+* **Additive Feature Attribution:** It expresses complex, non-linear model outputs as a linear sum of individual feature contributions relative to an average baseline expectation.
+* **Unpacking Feature Extraction:** For neural networks or dimensionality reduction models, SHAP computes the partial impact of raw input columns on newly extracted synthetic features (latent variables $z$).
+* **Local vs. Global Interpretability:** It yields per-sample explanations (local) that aggregate into global feature importance rankings across the entire dataset.
+
+---
+
+**Utility for Mapper After the Representation Step**
+
+SHAP is highly effective immediately following Mapper’s representation phase (PCA, AE, or VAE) to translate abstract $z$-coordinates back into domain-specific physical variables:
+
+* **Latent Axis Profiling (Encoder SHAP):** Passing your trained encoder $x \to z$ into `shap.DeepExplainer` maps each latent dimension back to raw input columns. This tells the scientist exactly which original physical parameters constructed latent coordinate $z_k$.
+
+
+* **Anomaly Root-Cause Triage (Reconstruction SHAP):** Applying SHAP to the reconstruction error function $f(x) = \Vert{}x - \hat{x}\Vert{}$ pinpoints the exact physical variables responsible for driving up the anomaly score on flagged points.
+
+
+* **Physical Regime Signatures:** Aggregating SHAP feature importance by cluster label (e.g., HDBSCAN clusters on $z$) reveals the key physical parameters defining each operating regime in the Latent Atlas.
+
+
+
+*Implementation Note:* Generic `KernelSHAP` is model-agnostic but computationally expensive on large matrices. For PyTorch Autoencoders and VAEs in Mapper, use **`shap.DeepExplainer`** or **`shap.GradientExplainer`** to leverage gradient shortcuts for fast execution.
+### 1. The Mathematics of Shapley Values
+
+Shapley analysis stems from cooperative game theory (Lloyd Shapley, 1953). It treats input features as "players" in a game and the model's prediction as the "payout," fairly allocating credit to each feature based on its marginal contribution across all possible feature combinations.
+
+The Shapley value $\phi_i$ for feature $i$ is calculated as:
+
+$$\phi_i(v) = \sum_{S \subseteq N \setminus \{i\}} \frac{\vert{}S\vert{}!(M - \vert{}S\vert{} - 1)!}{M!} \Big( v(S \cup \{i\}) - v(S) \Big)$$
+
+* **$N$ and $M$:** $N$ is the set of all $M$ input features.
+* **$S$:** A subset (coalition) of features that excludes feature $i$.
+* **$v(S)$:** The value function—the expected output of the model trained/evaluated using only the features present in subset $S$.
+* **$v(S \cup \{i\}) - v(S)$:** The **marginal contribution** of feature $i$ when added to subset $S$.
+* **$\frac{\vert{}S\vert{}!(M - \vert{}S\vert{} - 1)!}{M!}$:** A combinatorial weighting factor representing the probability that coalition $S$ forms when features are added one by one in a random order.
+
+**Key Axiom (Efficiency/Additivity):** The sum of all feature attributions equals the difference between the model's actual prediction $f(x)$ and the baseline expected value $E[f(x)]$:
+
+$$f(x) = E[f(x)] + \sum_{i=1}^{M} \phi_i$$
+
+---
+
+### 2. How SHAP Implements This Computationally
+
+Computing exact Shapley values directly requires evaluating $2^M$ subset combinations. For a dataset with 30 features, $2^{30} \approx 1 \text{ billion}$ model calls per sample, making raw brute-force calculation computationally impossible.
+
+Python’s `shap` library solves this through three main computational techniques:
+
+**A. Marginal Expectations for Missing Features**
+Standard machine learning models cannot take a missing feature subset $S$ directly. SHAP simulates "removing" features outside of $S$ by replacing their values with random samples drawn from a reference/background dataset $X_{\text{background}}$:
+
+$$v(S) \approx \frac{1}{K} \sum_{k=1}^K f(x_S, x_{\text{background}, \bar{S}}^{(k)})$$
+
+**B. KernelSHAP (Model-Agnostic Weighted Linear Regression)**
+Instead of summing over all $2^M$ coalitions, `KernelSHAP` frames the problem as an additive linear surrogate model:
+
+$$g(z') = \phi_0 + \sum_{j=1}^M \phi_j z'_j$$
+
+1. **Sampling:** It samples a manageable subset of binary mask vectors $z' \in \{0, 1\}^M$ (where $1$ means feature present, $0$ means masked/replaced by background data).
+2. **Shapley Kernel Weights:** It weights each sampled mask $z'$ using the mathematical **Shapley Kernel**:
+
+$$\pi_x(z') = \frac{M - 1}{\binom{M}{\vert{}z'\vert{}} \vert{}z'\vert{} (M - \vert{}z'\vert{})}$$
+
+3. **Solve via Weighted Least Squares:** It solves a weighted linear regression using these sampled masks. The fitted regression coefficients $\phi_j$ are guaranteed to converge to the true Shapley values.
+
+**C. Model-Specific Optimizations (Fast Exact/Approximate Passes)**
+To avoid sampling entirely, `shap` uses specialized algorithms that exploit model architectures:
+
+* **TreeSHAP (Decision Trees/Random Forests/XGBoost):** Traverses tree structures conditionally in $O(T L D^2)$ time (where $T$ is trees, $L$ is max leaves, $D$ is depth) instead of exponential $O(2^M)$ time by tracking background coverage down decision paths.
+* **DeepSHAP / GradientSHAP (Neural Networks / Autoencoders):** Combines Shapley values with DeepLIFT and Integrated Gradients. It backpropagates analytical attribution multipliers through the network's activation layers using the chain rule, estimating $\phi_i$ in a few backward passes.
+All three methods can be executed completely without SHAP, but SHAP specifically represents one formalized framework within the **Feature Attribution** category.
+
+**1. Direct Inspection via Loadings (PCA)**
+
+* **Relationship to SHAP:** Completely independent of SHAP.
+* **Can it be done without SHAP?** Yes. Because PCA is linear, you simply extract `pca.components_` directly from `scikit-learn`. Running SHAP on PCA is unnecessary because the loadings give you the exact mathematical weights directly.
+
+**2. Feature Attribution and Gradients (AE/VAE)**
+
+* **Relationship to SHAP:** SHAP (`DeepExplainer` / `GradientExplainer`) is a specialized, axiomatic tool within this exact category.
+* **Can it be done without SHAP?** Yes. You can perform feature attribution without SHAP by computing raw input-to-latent Jacobians or backpropagating standard gradients ($\frac{\partial z_k}{\partial x_j}$) directly in PyTorch using `torch.autograd`. SHAP is simply a more robust alternative that prevents gradient saturation issues.
+
+**3. Decoder Latent Traversals**
+
+* **Relationship to SHAP:** Completely independent of SHAP.
+* **Can it be done without SHAP?** Yes. Latent traversal is a forward simulation technique, not an attribution algorithm. You manually vary a latent coordinate $z_k$ across a grid while holding other coordinates fixed, pass those vectors through the decoder ($\hat{x} = \text{Decoder}(z)$), and plot how raw physical features respond. SHAP plays no role in this process.

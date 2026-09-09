@@ -41,6 +41,7 @@ from .preprocess import DataScaler, ImageDataScaler, analyze_missingness
 from .progress import mapper_progress
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
 from .anomaly.anomaly import run_anomaly_detection
+from .attribution.feature_attribution import run_feature_attribution
 from .stability.stability import run_cluster_stability
 from .tendency import _summarize_cluster_tendency, save_tendency_heatmap
 from .viz import plot_mapper_latent, plot_mapper_pca, plot_mapper_reconstruction
@@ -967,6 +968,59 @@ def run_mapper_workflow(
             anomaly_report = {"status": "failed", "error": str(exc)}
             print(f"[Mapper anomaly] failed: {exc}", flush=True)
 
+    ###FEATURE ATTRIBUTION MODULE STEP (raw features -> latent axes -> clusters)###
+    attribution_report: Optional[Dict[str, Any]] = None
+    attribution_artifacts: Dict[str, str] = {}
+    attribution_config = dict(spec.mapper_attribution)
+    if bool(attribution_config.get("enabled", True)):
+        try:
+            X_all_scaled, _ = _combine_generic_splits(
+                X_train, X_val, X_test, raw.train_index, raw.val_index, raw.test_index
+            )
+            cluster_labels_hdbscan = (
+                np.asarray(clustering_report["labels"]["hdbscan"])
+                if clustering_report is not None
+                and isinstance(clustering_report.get("labels"), dict)
+                and "hdbscan" in clustering_report["labels"]
+                else None
+            )
+            max_axes_cfg = attribution_config.get("max_axes", 8)
+            attribution_report = run_feature_attribution(
+                selected_adapter,
+                selected_rung,
+                X_all_scaled,
+                Z_all,
+                list(dataset.input_columns),
+                cluster_labels=cluster_labels_hdbscan,
+                max_axes=None if max_axes_cfg is None else int(max_axes_cfg),
+                n_background=int(attribution_config.get("n_background", 100)),
+                n_explain=int(attribution_config.get("n_explain", 200)),
+                top_k=int(attribution_config.get("top_k", 10)),
+                random_state=int(attribution_config.get("random_state", spec.seed)),
+            )
+            if attribution_report.get("status") == "complete":
+                attribution_dir = paths.root / "attribution"
+                attribution_dir.mkdir(parents=True, exist_ok=True)
+                attribution_report_path = attribution_dir / "feature_attribution.json"
+                with attribution_report_path.open("w", encoding="utf-8") as handle:
+                    json.dump(attribution_report, handle, indent=2)
+                attribution_artifacts = {"report": posix_str(attribution_report_path)}
+                print(
+                    "[Mapper attribution] "
+                    f"status=complete, method={attribution_report.get('method')}",
+                    flush=True,
+                )
+            else:
+                print(
+                    "[Mapper attribution] "
+                    f"status={attribution_report.get('status')}, "
+                    f"reason={attribution_report.get('reason')}",
+                    flush=True,
+                )
+        except Exception as exc:  # feature attribution must not fail the workflow
+            attribution_report = {"status": "failed", "error": str(exc)}
+            print(f"[Mapper attribution] failed: {exc}", flush=True)
+
     viz_artifacts: Dict[str, Any] = {}
     visualization_config = dict(spec.mapper_visualization)
     if bool(visualization_config.get("enabled", True)):
@@ -1067,6 +1121,8 @@ def run_mapper_workflow(
         metrics_payload["stability"] = stability_report
     if anomaly_report is not None:
         metrics_payload["anomaly"] = anomaly_report
+    if attribution_report is not None:
+        metrics_payload["attribution"] = attribution_report
     if align_report is not None:
         metrics_payload["align"] = align_report
     save_metrics(metrics_payload, paths)
@@ -1115,6 +1171,7 @@ def run_mapper_workflow(
         ),
         "stability": stability_report,
         "anomaly": anomaly_report,
+        "attribution": attribution_report,
         "align": align_report,
         "next_stage": (
             None
@@ -1137,6 +1194,7 @@ def run_mapper_workflow(
             "clustering": clustering_artifacts,
             "stability": stability_artifacts,
             "anomaly": anomaly_artifacts,
+            "attribution": attribution_artifacts,
             "align": align_artifacts,
             "visualization": viz_artifacts,
             "spec": posix_str(paths.spec_file),

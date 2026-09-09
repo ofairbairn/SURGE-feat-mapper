@@ -97,6 +97,10 @@ class SurrogateWorkflowSpec:
     # Reconstruction error, HDBSCAN GLOSH, GMM Mahalanobis, Isolation Forest,
     # LOF, and marginal Vendi contribution anomaly triage for Mapper.
     mapper_anomaly: Dict[str, Any] = field(default_factory=dict)
+    # Raw-feature attribution for the selected representation: PCA loadings,
+    # or per-latent-axis GradientExplainer SHAP for AE/VAE, aggregated by
+    # cluster label.
+    mapper_attribution: Dict[str, Any] = field(default_factory=dict)
     # Latent + reconstruction plot emission at the end of a Mapper run.
     mapper_visualization: Dict[str, Any] = field(default_factory=dict)
     # Missing-value detection, missingno plots, and MCAR testing on the raw
