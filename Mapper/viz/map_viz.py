@@ -1,8 +1,8 @@
 """
 Mapper visualization module.
 
-Owns the unsupervised-latent and reconstruction plot families (migrated from
-``surge.viz.run_viz``) plus Mapper-native entry points that render from
+Owns the unsupervised-latent and reconstruction plot families
+plus Mapper-native entry points that render from
 in-memory arrays (``plot_mapper_latent``, ``plot_mapper_reconstruction``) so
 the Mapper pipeline can emit plots straight into the run directory without
 reloading the dataset, scalers, or models.
