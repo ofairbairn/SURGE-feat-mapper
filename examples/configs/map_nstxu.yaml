@@ -1,6 +1,6 @@
 workflow:
   workflow_type: mapper
-  dataset_path: "C:\\Users\\Bipo1\\.cache\\huggingface\\hub\\datasets--SURGE-AIML--tokamakergen-nstxu-run10k\\snapshots\\a5830aeabf742f48dd4595e53376885f221be46f\\nstxu_RUN_10k_light\\nstxu_RUN_10k\\Equil_data_with_synthetic.csv"
+  dataset_path: "C:\\Users\\Bipo1\\Downloads\\New equilibrium dataset\\new_equilibrium_data.csv"
   dataset_format: auto
   # dataset_source: M3D-C1 batch-dir loading ("m3dc1_batch" / "m3dc1_batch_per_mode")
   # is not wired up for workflow_type=mapper yet -- leave null for a CSV/parquet path.
@@ -13,7 +13,10 @@ workflow:
   sample_rows: null
   # Analyzer hints/overrides used when SurrogateDataset infers column roles.
   analyzer: {}
-  metadata_overrides: {}
+  # Excludes non-numeric/flag columns from Mapper's reconstruction inputs;
+  # "outputs" here just means "not a scaled input" for this unsupervised run.
+  metadata_overrides:
+    outputs: [plasma_configuration, Converged, Diverted]
   # Mapper input-layout hints. "auto" infers from metadata/column names;
   # image data additionally needs input_shape as (C, H, W).
   data_type: tabular
