@@ -1,6 +1,6 @@
 workflow:
   workflow_type: mapper
-  dataset_path: "C:\\Users\\Bipo1\\Downloads\\VAE UCI Wine Data\\winequality-white-comma-unsupervised.csv"
+  dataset_path: "C:\\Users\\Bipo1\\.cache\\huggingface\\hub\\datasets--SURGE-AIML--tokamakergen-nstxu-run10k\\snapshots\\a5830aeabf742f48dd4595e53376885f221be46f\\nstxu_RUN_10k_light\\nstxu_RUN_10k\\Equil_data_with_synthetic.csv"
   dataset_format: auto
   # dataset_source: M3D-C1 batch-dir loading ("m3dc1_batch" / "m3dc1_batch_per_mode")
   # is not wired up for workflow_type=mapper yet -- leave null for a CSV/parquet path.
@@ -19,7 +19,7 @@ workflow:
   data_type: tabular
   input_shape: null
   output_dir: .
-  run_tag: white_wine
+  run_tag: nstx_u_equil_data
   overwrite_existing_run: false
   # Mapper ladder gate keys (val RMSE). Rungs always run PCA -> AE -> VAE in
   # that fixed order; the first rung meeting its threshold is selected.
