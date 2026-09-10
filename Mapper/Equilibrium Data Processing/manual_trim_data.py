@@ -12,16 +12,21 @@ empty_cols = eq_data.columns[eq_data.isna().all()].tolist()
 # string_columns = eq_data.select_dtypes(include=['object','string']).columns.tolist()
 # print(string_columns) #plasma_configuration is STR, #converged and diverted are both BOOLS
 # print(eq_data.info(verbose=True,max_cols=None,show_counts=True))
-# empty_rows = eq_data.index[eq_data.isna().all(axis=1)] #not necessary right now
-# print(empty_rows.tolist())
+
+#make new csv, where the empty columns are removed.
 new_eq = eq_data.drop(empty_cols, axis=1)
 output_dir = Path("C:\\Users\\Bipo1\\Downloads\\New equilibrium dataset")
-new_eq.to_csv(output_dir / "new_equilibrium_data.csv", na_rep="", index=False)
+new_eq.to_csv(output_dir / "no_empty_columns.csv", na_rep="", index=False)
 
 # The sparse probe columns are only populated for the last 1000 rows
 # (index 9000-9999); keep just that dense block so Mapper's dropna doesn't
 # gut the dataset.
 new_eq_trimmed = new_eq.tail(1000).copy()
 print(f"trimmed shape: {new_eq_trimmed.shape}, remaining NaNs: {int(new_eq_trimmed.isna().sum().sum())}")
-new_eq_trimmed.to_csv(output_dir / "new_trimmed_eq_data.csv", na_rep="", index=False)
+new_eq_trimmed.to_csv(output_dir / "no_empty_columns_trimmed.csv", na_rep="", index=False)
 
+#make a new csv, where the empty columns (already removed) and empty rows are removed.
+empty_rows = new_eq.index[new_eq.isna().all(axis=1)] 
+new_eq_no_empty_rows = new_eq.drop(empty_rows, axis=0)
+new_eq_no_empty_rows.to_csv(output_dir / "no_empty_columns_or_rows.csv", na_rep="", index=False)
+# print(empty_rows.tolist())

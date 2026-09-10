@@ -1,6 +1,6 @@
 workflow:
   workflow_type: mapper
-  dataset_path: "C:\\Users\\Bipo1\\Downloads\\New equilibrium dataset\\new_trimmed_eq_data.csv"
+  dataset_path: "C:\\Users\\Bipo1\\Downloads\\New equilibrium dataset\\new_equilibrium_data.csv"
   dataset_format: auto
   # dataset_source: M3D-C1 batch-dir loading ("m3dc1_batch" / "m3dc1_batch_per_mode")
   # is not wired up for workflow_type=mapper yet -- leave null for a CSV/parquet path.
@@ -22,7 +22,7 @@ workflow:
   data_type: tabular
   input_shape: null
   output_dir: .
-  run_tag: nstx_trimmed
+  run_tag: nstx_eq_nonlinear
   overwrite_existing_run: false
   # Mapper ladder gate keys (val RMSE). Rungs always run PCA -> AE -> VAE in
   # that fixed order; the first rung meeting its threshold is selected.

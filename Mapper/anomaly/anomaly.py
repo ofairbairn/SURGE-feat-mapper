@@ -155,11 +155,22 @@ def _compute_gmm_mahalanobis(
     except Exception:
         return None
 
+    return _compute_gmm_mahalanobis_from_model(latent, gmm=gmm)
+
+
+def _compute_gmm_mahalanobis_from_model(
+    latent: np.ndarray,
+    *,
+    gmm: Any,
+) -> Optional[np.ndarray]:
+    """Minimum Mahalanobis distance using an already-fitted GMM (no re-fit)."""
     try:
         precisions = _gmm_component_precisions(gmm)
     except Exception:
         return None
 
+    n_samples = len(latent)
+    n_components_eff = gmm.means_.shape[0]
     distances = np.full((n_samples, n_components_eff), np.inf, dtype=np.float64)
     for k in mapper_progress(
         range(n_components_eff),
@@ -346,6 +357,8 @@ def run_anomaly_detection(
     vendi_max_samples: Optional[int] = 200,
     rbf_bandwidth: Optional[float] = None,
     random_state: int = 42,
+    precomputed_hdbscan_glosh: Optional[np.ndarray] = None,
+    precomputed_gmm_model: Optional[Any] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, np.ndarray]]:
     """Score latent samples with complementary signals and rank a triage list.
 
@@ -354,6 +367,17 @@ def run_anomaly_detection(
     contribution (guide Section 8 Signals 1-3 and 5) into one ranked triage
     list. TheMapper never issues an automatic verdict here -- it flags and
     ranks samples with reasons for a scientist to review.
+
+    Parameters
+    ----------
+    precomputed_hdbscan_glosh:
+        Pre-computed GLOSH outlier scores from the clustering stage's
+        HDBSCAN fit.  When provided, ``_compute_hdbscan_glosh`` is skipped
+        entirely.
+    precomputed_gmm_model:
+        A pre-fitted ``GaussianMixture`` from the clustering stage.  When
+        provided, ``_compute_gmm_mahalanobis`` reuses its parameters instead
+        of fitting a new model.
     """
     latent_array = _as_2d_array(latent)
     n_samples = int(len(latent_array))
@@ -383,19 +407,30 @@ def run_anomaly_detection(
         # Reconstruction error is supplied by the representation stage.
         signal_progress.update(1)
         signal_progress.set_postfix(signal="reconstruction error")
-        hdbscan_glosh = _compute_hdbscan_glosh(
-            latent_array,
-            min_cluster_size=hdbscan_min_cluster_size,
-            min_samples=hdbscan_min_samples,
-        )
+        # Use pre-computed GLOSH when available; otherwise fit HDBSCAN here.
+        if precomputed_hdbscan_glosh is not None and len(precomputed_hdbscan_glosh) == n_samples:
+            hdbscan_glosh = np.asarray(precomputed_hdbscan_glosh, dtype=np.float64)
+        else:
+            hdbscan_glosh = _compute_hdbscan_glosh(
+                latent_array,
+                min_cluster_size=hdbscan_min_cluster_size,
+                min_samples=hdbscan_min_samples,
+            )
         signal_progress.update(1)
         signal_progress.set_postfix(signal="HDBSCAN GLOSH")
-        gmm_mahalanobis = _compute_gmm_mahalanobis(
-            latent_array,
-            n_components=n_components_hint,
-            covariance_type=gmm_covariance_type,
-            random_state=random_state,
-        )
+        # Use pre-fitted GMM when available; only compute Mahalanobis distances.
+        if precomputed_gmm_model is not None:
+            gmm_mahalanobis = _compute_gmm_mahalanobis_from_model(
+                latent_array,
+                gmm=precomputed_gmm_model,
+            )
+        else:
+            gmm_mahalanobis = _compute_gmm_mahalanobis(
+                latent_array,
+                n_components=n_components_hint,
+                covariance_type=gmm_covariance_type,
+                random_state=random_state,
+            )
         signal_progress.update(1)
         signal_progress.set_postfix(signal="GMM Mahalanobis")
         isolation_forest_scores = _compute_isolation_forest(

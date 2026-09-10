@@ -368,12 +368,28 @@ def _plot_latent_dendrogram(
     return out_png
 
 
+_CONTINUOUS_HOVER_COLS = {
+    "combined_anomaly_score",
+    "marginal_vendi",
+    "recon_error",
+    "recon_error_norm",
+}
+
+_INTERACTIVE_COLOR_LABELS: Dict[str, str] = {
+    "combined_anomaly_score": "Combined anomaly score",
+    "cluster": "Detected cluster",
+    "label": "Label",
+    "marginal_vendi": "Marginal Vendi contribution",
+    "data_split": "Dataset split",
+}
+
+
 def _plot_latent_interactive(
     latent_df: pd.DataFrame,
     *,
     title: str,
     out_html: Path,
-    color_by: str = "label",
+    color_by: str = "combined_anomaly_score",
     random_state: int = 42,
     hover_sample_frac: float = 0.02,
     datashader_threshold: int = 50_000,
@@ -389,10 +405,25 @@ def _plot_latent_interactive(
     hv.extension("bokeh")
 
     plot_df = latent_df.copy()
-    if color_by not in plot_df.columns or plot_df[color_by].isna().all():
-        color_by = "cluster" if "cluster" in plot_df.columns and not plot_df["cluster"].isna().all() else "label"
 
-    if color_by in plot_df.columns:
+    def _has_usable_values(column: str) -> bool:
+        if column not in plot_df.columns:
+            return False
+        if column in _CONTINUOUS_HOVER_COLS:
+            numeric = pd.to_numeric(plot_df[column], errors="coerce")
+            return bool(np.isfinite(numeric.to_numpy(dtype=np.float64)).any())
+        return not plot_df[column].isna().all()
+
+    if not _has_usable_values(color_by):
+        color_by = "cluster" if _has_usable_values("cluster") else "label"
+    if not _has_usable_values(color_by):
+        LOG.info("No usable coloring found for interactive latent plot; skipping HTML output.")
+        return None
+
+    is_continuous = color_by in _CONTINUOUS_HOVER_COLS
+    if is_continuous:
+        plot_df[color_by] = pd.to_numeric(plot_df[color_by], errors="coerce")
+    else:
         plot_df[color_by] = plot_df[color_by].astype("string").fillna("NA").astype("category")
     if "cluster" in plot_df.columns:
         plot_df["cluster"] = plot_df["cluster"].astype("string").fillna("NA")
@@ -413,30 +444,31 @@ def _plot_latent_interactive(
     hover_cols = [col for col in hover_cols if col in plot_df.columns]
     hover_tooltips = []
     for col in hover_cols:
-        if col in {
-            "combined_anomaly_score",
-            "marginal_vendi",
-            "recon_error",
-            "recon_error_norm",
-        }:
+        if col in _CONTINUOUS_HOVER_COLS:
             hover_tooltips.append((col, f"@{{{col}}}{{0.000}}"))
         else:
             hover_tooltips.append((col, f"@{{{col}}}"))
-    n_categories = int(plot_df[color_by].nunique())
-    if n_categories <= 10:
-        cmap_name: Any = "Category10"
-    elif n_categories <= 20:
-        cmap_name = "Category20"
-    else:
-        from matplotlib import colormaps
-        from matplotlib.colors import to_hex
 
-        dynamic_cmap = colormaps.get_cmap("gist_rainbow").resampled(n_categories)
-        cmap_name = [to_hex(dynamic_cmap(i)) for i in range(n_categories)]
+    if is_continuous:
+        cmap_name: Any = "Viridis"
+        aggregator = ds.mean(color_by)
+    else:
+        n_categories = int(plot_df[color_by].nunique())
+        if n_categories <= 10:
+            cmap_name = "Category10"
+        elif n_categories <= 20:
+            cmap_name = "Category20"
+        else:
+            from matplotlib import colormaps
+            from matplotlib.colors import to_hex
+
+            dynamic_cmap = colormaps.get_cmap("gist_rainbow").resampled(n_categories)
+            cmap_name = [to_hex(dynamic_cmap(i)) for i in range(n_categories)]
+        aggregator = ds.count_cat(color_by)
 
     points = hv.Points(plot_df, kdims=["x", "y"], vdims=hover_cols)
     if len(plot_df) > datashader_threshold:
-        background = hd.datashade(points, aggregator=ds.count_cat(color_by), cmap=cmap_name, how="eq_hist")
+        background = hd.datashade(points, aggregator=aggregator, cmap=cmap_name, how="eq_hist")
         hover_n = min(len(plot_df), max(1000, int(len(plot_df) * hover_sample_frac)))
         sampled = plot_df.sample(n=hover_n, random_state=random_state) if hover_n < len(plot_df) else plot_df
         hover_points = hv.Points(sampled, kdims=["x", "y"], vdims=hover_cols).opts(
@@ -462,21 +494,22 @@ def _plot_latent_interactive(
             line_alpha=0.2,
         )
 
-    centroid_rows = plot_df[
-        plot_df["cluster"].notna() & (plot_df["cluster"] != "-1")
-    ]
-    if not centroid_rows.empty:
-        centroid_df = centroid_rows.groupby("cluster", as_index=False)[["x", "y"]].mean()
-        labels = hv.Labels(centroid_df, kdims=["x", "y"], vdims=["cluster"]).opts(
-            text_font_size="10pt",
-            text_color="black",
-        )
-        overlay = overlay * labels
+    if "cluster" in plot_df.columns:
+        centroid_rows = plot_df[
+            plot_df["cluster"].notna() & (plot_df["cluster"] != "-1")
+        ]
+        if not centroid_rows.empty:
+            centroid_df = centroid_rows.groupby("cluster", as_index=False)[["x", "y"]].mean()
+            labels = hv.Labels(centroid_df, kdims=["x", "y"], vdims=["cluster"]).opts(
+                text_font_size="10pt",
+                text_color="black",
+            )
+            overlay = overlay * labels
 
     overlay = overlay.opts(
         width=900,
         height=650,
-        title=title,
+        title=f"{title} - {_INTERACTIVE_COLOR_LABELS.get(color_by, color_by)}",
         toolbar="above",
         show_grid=True,
         legend_position="right",
@@ -763,22 +796,21 @@ def _save_embedding(
             saved.append(str(png_path))
 
         # Keep one interactive Bokeh artifact for UMAP only, colored by the
-        # dynamically sized cluster palette. t-SNE never emits HTML.
-        if not embedding_df["cluster"].isna().all():
-            html_path = output_dir / (
-                f"latent_{safe_model_name}_{embedding_type}_cluster.html"
-            )
-            html_saved = _plot_latent_interactive(
-                embedding_df,
-                title=f"{title} - Detected cluster",
-                out_html=html_path,
-                color_by="cluster",
-                random_state=random_state,
-                hover_sample_frac=interactive_hover_sample_frac,
-                datashader_threshold=interactive_threshold,
-            )
-            if html_saved is not None:
-                saved.append(str(html_saved))
+        # combined anomaly score. t-SNE never emits HTML.
+        html_path = output_dir / (
+            f"latent_{safe_model_name}_{embedding_type}_anomaly.html"
+        )
+        html_saved = _plot_latent_interactive(
+            embedding_df,
+            title=title,
+            out_html=html_path,
+            color_by="combined_anomaly_score",
+            random_state=random_state,
+            hover_sample_frac=interactive_hover_sample_frac,
+            datashader_threshold=interactive_threshold,
+        )
+        if html_saved is not None:
+            saved.append(str(html_saved))
     else:
         png_path = output_dir / f"latent_{safe_model_name}_{embedding_type}.png"
         _plot_latent_matplotlib(

@@ -36,7 +36,7 @@ from .align import (
     save_reference_anchors,
     select_anchor_positions,
 )
-from .cluster import run_cluster_analysis
+from .cluster import run_cluster_analysis, get_cluster_fitted_models
 from .preprocess import DataScaler, ImageDataScaler, analyze_missingness
 from .progress import mapper_progress
 from .diversity import compute_vendi_diversity, plot_vendi_q_profile
@@ -619,7 +619,7 @@ def run_mapper_workflow(
             f"using {diversity_report['kernel']['name'].upper()} kernel",
             flush=True,
         )
-
+    ### TENDENCY MODULE ####
     tendency_report: Optional[Dict[str, Any]] = None
     tendency_decision: Optional[Dict[str, Any]] = None
     tendency_artifacts: Dict[str, str] = {}
@@ -720,7 +720,7 @@ def run_mapper_workflow(
                 f"[Mapper tendency] {tendency_decision['message']}",
                 flush=True,
             )
-
+        #### CLUSTERING MODULE ####
     clustering_report: Optional[Dict[str, Any]] = None
     clustering_artifacts: Dict[str, str] = {}
     clustering_config = dict(spec.mapper_clustering)
@@ -762,6 +762,11 @@ def run_mapper_workflow(
                 gmm_covariance_type=str(
                     clustering_config.get("gmm_covariance_type", "full")
                 ),
+                global_vendi_score=(
+                    diversity_report.get("vendi_score")
+                    if diversity_report is not None
+                    else None
+                ),
             )
             clustering_report["selected_representation"] = selected_rung
             clustering_report["embedding"] = {
@@ -790,7 +795,7 @@ def run_mapper_workflow(
         except Exception as exc:  # clustering must not fail the workflow
             clustering_report = {"status": "failed", "error": str(exc)}
             print(f"[Mapper clustering] failed: {exc}", flush=True)
-
+        ### STABILITY MODULE ####
     stability_report: Optional[Dict[str, Any]] = None
     stability_artifacts: Dict[str, str] = {}
     stability_config = dict(spec.mapper_stability)
@@ -798,14 +803,17 @@ def run_mapper_workflow(
         if str(clustering_report.get("status", "")).lower() == "complete":
             try:
                 selected_k = int(clustering_report.get("k_selection", {}).get("selected_k", 1))
+                # Extract pre-computed labels from the clustering stage to
+                # avoid redundant KMeans/GMM re-fits for the stability baseline.
+                _clustering_labels = (
+                    clustering_report.get("labels")
+                    if isinstance(clustering_report.get("labels"), dict)
+                    else None
+                )
                 stability_report, stability_arrays = run_cluster_stability(
                     Z_all,
                     selected_k=selected_k,
-                    baseline_labels=(
-                        clustering_report.get("labels")
-                        if isinstance(clustering_report.get("labels"), dict)
-                        else None
-                    ),
+                    baseline_labels=_clustering_labels,
                     n_bootstraps=int(stability_config.get("n_bootstraps", 25)),
                     bootstrap_fraction=float(stability_config.get("bootstrap_fraction", 0.8)),
                     random_state=int(stability_config.get("random_state", spec.seed)),
@@ -824,6 +832,16 @@ def run_mapper_workflow(
                         None
                         if clustering_config.get("hdbscan_min_samples") is None
                         else int(clustering_config["hdbscan_min_samples"])
+                    ),
+                    precomputed_kmeans_labels=(
+                        np.asarray(_clustering_labels["kmeans"])
+                        if _clustering_labels is not None and "kmeans" in _clustering_labels
+                        else None
+                    ),
+                    precomputed_gmm_labels=(
+                        np.asarray(_clustering_labels["gmm"])
+                        if _clustering_labels is not None and "gmm" in _clustering_labels
+                        else None
                     ),
                 )
                 stability_report["selected_representation"] = selected_rung
@@ -880,7 +898,7 @@ def run_mapper_workflow(
             except Exception as exc:  # stability must not fail the workflow
                 stability_report = {"status": "failed", "error": str(exc)}
                 print(f"[Mapper stability] failed: {exc}", flush=True)
-
+        #### ANOMALY MODULE ####
     anomaly_report: Optional[Dict[str, Any]] = None
     anomaly_artifacts: Dict[str, str] = {}
     anomaly_arrays: Optional[Dict[str, np.ndarray]] = None
@@ -894,6 +912,9 @@ def run_mapper_workflow(
                 and clustering_report.get("k_selection", {}).get("selected_k") is not None
                 else None
             )
+            # Extract pre-fitted models from the clustering stage so the
+            # anomaly module does not re-fit HDBSCAN or GMM.
+            _fitted_models = get_cluster_fitted_models()
             anomaly_report, anomaly_arrays = run_anomaly_detection(
                 Z_all,
                 recon_error=(
@@ -928,6 +949,8 @@ def run_mapper_workflow(
                 ),
                 rbf_bandwidth=anomaly_config.get("rbf_bandwidth"),
                 random_state=int(anomaly_config.get("random_state", spec.seed)),
+                precomputed_hdbscan_glosh=_fitted_models.get("hdbscan_glosh_scores"),
+                precomputed_gmm_model=_fitted_models.get("gmm_model"),
             )
             if anomaly_report.get("status") == "complete":
                 for entry in anomaly_report["top_anomalies"]:
@@ -1020,7 +1043,7 @@ def run_mapper_workflow(
         except Exception as exc:  # feature attribution must not fail the workflow
             attribution_report = {"status": "failed", "error": str(exc)}
             print(f"[Mapper attribution] failed: {exc}", flush=True)
-
+        #### VISUALIZATION MODULE ####
     viz_artifacts: Dict[str, Any] = {}
     visualization_config = dict(spec.mapper_visualization)
     if bool(visualization_config.get("enabled", True)):
@@ -1104,7 +1127,7 @@ def run_mapper_workflow(
             )
         except Exception as exc:
             print(f"[Mapper visualization] failed: {exc}", flush=True)
-
+        ### FINAL REPORT STEPS ####
     metrics_payload: Dict[str, Any] = {
         "representation_ladder": ladder_results,
         "input_layout": input_layout,

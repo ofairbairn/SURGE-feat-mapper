@@ -11,6 +11,7 @@ from .cluster import (
     _label_agreement,
     _nearest_neighbor_preservation,
     _partition_scores,
+    get_cluster_fitted_models,
     run_cluster_analysis,
 )
 
@@ -25,5 +26,6 @@ __all__ = [
     "_label_agreement",
     "_nearest_neighbor_preservation",
     "_partition_scores",
+    "get_cluster_fitted_models",
     "run_cluster_analysis",
 ]

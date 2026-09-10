@@ -284,8 +284,22 @@ def run_cluster_stability(
 	gmm_covariance_type: str = "full",
 	hdbscan_min_cluster_size: int = 20,
 	hdbscan_min_samples: Optional[int] = None,
+	precomputed_kmeans_labels: Optional[np.ndarray] = None,
+	precomputed_gmm_labels: Optional[np.ndarray] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, np.ndarray]]:
-	"""Assess the stability of the selected Mapper clustering solution."""
+	"""Assess the stability of the selected Mapper clustering solution.
+
+	Parameters
+	----------
+	precomputed_kmeans_labels:
+		Pre-computed KMeans labels at ``selected_k`` from the clustering
+		stage.  When provided, the baseline KMeans fit is skipped and these
+		labels are used directly.
+	precomputed_gmm_labels:
+		Pre-computed GMM labels at ``selected_k`` from the clustering
+		stage.  When provided, the baseline GMM fit is skipped and these
+		labels are used directly.
+	"""
 	latent_array = _as_2d_array(latent)
 	n_samples = int(len(latent_array))
 	if n_samples < 2:
@@ -315,17 +329,31 @@ def run_cluster_stability(
 	bootstrap_count = max(1, int(n_bootstraps))
 	bootstrap_fraction = float(bootstrap_fraction)
 
-	baseline_kmeans = _fit_kmeans_labels(
-		latent_used,
-		n_clusters=effective_k,
-		random_state=random_state,
-	)
-	baseline_gmm = _fit_gmm_labels(
-		latent_used,
-		n_clusters=effective_k,
-		random_state=random_state,
-		covariance_type=gmm_covariance_type,
-	)
+	# Use pre-computed labels from the clustering stage when available;
+	# otherwise fit fresh baselines (avoids redundant KMeans/GMM fits).
+	if (
+		precomputed_kmeans_labels is not None
+		and np.asarray(precomputed_kmeans_labels).shape[0] == n_samples
+	):
+		baseline_kmeans = np.asarray(precomputed_kmeans_labels, dtype=np.int64)[sample_positions]
+	else:
+		baseline_kmeans = _fit_kmeans_labels(
+			latent_used,
+			n_clusters=effective_k,
+			random_state=random_state,
+		)
+	if (
+		precomputed_gmm_labels is not None
+		and np.asarray(precomputed_gmm_labels).shape[0] == n_samples
+	):
+		baseline_gmm = np.asarray(precomputed_gmm_labels, dtype=np.int64)[sample_positions]
+	else:
+		baseline_gmm = _fit_gmm_labels(
+			latent_used,
+			n_clusters=effective_k,
+			random_state=random_state,
+			covariance_type=gmm_covariance_type,
+		)
 
 	baseline_hdbscan: Optional[np.ndarray] = None
 	hdbscan_baseline_status = "unavailable"

@@ -16,6 +16,21 @@ import numpy as np
 
 from Mapper.progress import mapper_progress, timed_operation
 
+# Module-level cache for fitted models produced by ``run_cluster_analysis``.
+# These sklearn model objects are not JSON-serializable and are stored here
+# so the pipeline can retrieve them without modifying the report dict.
+_last_fitted_models: Dict[str, Any] = {}
+
+
+def get_cluster_fitted_models() -> Dict[str, Any]:
+    """Return the most recently computed fitted models from ``run_cluster_analysis``.
+
+    Returns a dict with keys ``hdbscan_clusterer``, ``hdbscan_glosh_scores``,
+    ``kmeans_model``, and ``gmm_model``.  All values are ``None`` when no
+    analysis has been run yet or when a particular model was unavailable.
+    """
+    return dict(_last_fitted_models.get("cache", {}))
+
 
 def _nearest_neighbor_preservation(
     X_ref: np.ndarray,
@@ -372,11 +387,20 @@ def _cluster_latent_embeddings(
     agglomerative_linkage: str = "ward",
     gmm_covariance_type: str = "full",
     progress_stage: str = "clustering",
-) -> tuple[np.ndarray, Optional[np.ndarray]]:
+    return_clusterer: bool = False,
+) -> tuple[np.ndarray, Optional[np.ndarray], Optional[Any]]:
+    """Cluster latent embeddings with the requested algorithm.
+
+    Returns ``(labels, linkage_matrix, clusterer)``.  When
+    *return_clusterer* is False (the default), the third element is always
+    ``None`` for backward compatibility.  When True, the fitted sklearn/
+    hdbscan model object is returned so callers can reuse it (e.g. GLOSH
+    scores from HDBSCAN, or predict via KMeans/GMM).
+    """
     latent = np.asarray(latent, dtype=np.float64)
     n_samples = latent.shape[0]
     if n_samples < 2 or method.lower() in {"", "none", "off", "no"}:
-        return np.full(n_samples, -1, dtype=int), None
+        return np.full(n_samples, -1, dtype=int), None, None
 
     method_normalized = method.lower().strip()
     if method_normalized == "kmeans":
@@ -387,13 +411,13 @@ def _cluster_latent_embeddings(
         clusterer = KMeans(n_clusters=n_clusters_eff, random_state=random_state, n_init="auto")
         with timed_operation(progress_stage, f"K-means fit (k={n_clusters_eff})"):
             labels = clusterer.fit_predict(latent)
-        return labels, None
+        return labels, None, clusterer if return_clusterer else None
 
     if method_normalized == "dbscan":
         from sklearn.cluster import DBSCAN
 
         clusterer = DBSCAN(eps=dbscan_eps, min_samples=dbscan_min_samples)
-        return clusterer.fit_predict(latent), None
+        return clusterer.fit_predict(latent), None, clusterer if return_clusterer else None
 
     if method_normalized == "hdbscan":
         try:
@@ -407,7 +431,7 @@ def _cluster_latent_embeddings(
         )
         with timed_operation(progress_stage, "HDBSCAN fit"):
             labels = clusterer.fit_predict(latent)
-        return labels, None
+        return labels, None, clusterer if return_clusterer else None
 
     if method_normalized in {"gmm", "gaussian_mixture", "gm"}:
         from sklearn.mixture import GaussianMixture
@@ -421,7 +445,7 @@ def _cluster_latent_embeddings(
         )
         with timed_operation(progress_stage, f"GMM fit (k={n_components_eff})"):
             labels = clusterer.fit_predict(latent)
-        return labels, None
+        return labels, None, clusterer if return_clusterer else None
 
     if method_normalized == "agglomerative":
         from scipy.cluster.hierarchy import linkage
@@ -432,7 +456,7 @@ def _cluster_latent_embeddings(
         clusterer = AgglomerativeClustering(n_clusters=n_clusters_eff, linkage=agglomerative_linkage)
         labels = clusterer.fit_predict(latent)
         linkage_matrix = linkage(latent, method=agglomerative_linkage)
-        return labels, linkage_matrix
+        return labels, linkage_matrix, clusterer if return_clusterer else None
 
     raise ValueError(
         f"Unsupported cluster_method={method!r}. "
@@ -626,6 +650,7 @@ def run_cluster_analysis(
     hdbscan_min_cluster_size: int = 20,
     hdbscan_min_samples: Optional[int] = None,
     gmm_covariance_type: str = "full",
+    global_vendi_score: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Cluster a latent embedding with an HDBSCAN-anchored consensus workflow.
 
@@ -638,6 +663,12 @@ def run_cluster_analysis(
        against HDBSCAN.
     4. Within/between-cluster Vendi validate compactness and separation
        relative to the global Vendi score.
+
+    Parameters
+    ----------
+    global_vendi_score:
+        If provided, the pre-computed global Vendi Score from the diversity
+        module is reused instead of recomputing it here.
     """
     latent = np.asarray(latent, dtype=np.float64)
     n_samples = len(latent)
@@ -657,13 +688,28 @@ def run_cluster_analysis(
         "latent_dim": int(latent.shape[1]),
     }
 
-    hdbscan_labels, _ = _cluster_latent_embeddings(
+    hdbscan_labels, _, hdbscan_clusterer = _cluster_latent_embeddings(
         latent,
         method="hdbscan",
         random_state=random_state,
         hdbscan_min_cluster_size=hdbscan_min_cluster_size,
         hdbscan_min_samples=hdbscan_min_samples,
+        return_clusterer=True,
     )
+
+    # Extract GLOSH outlier scores from the fitted HDBSCAN model once;
+    # downstream anomaly detection reuses them instead of re-fitting.
+    hdbscan_glosh_scores: Optional[np.ndarray] = None
+    if hdbscan_clusterer is not None:
+        try:
+            hdbscan_glosh_scores = np.asarray(
+                hdbscan_clusterer.outlier_scores_, dtype=np.float64
+            )
+        except Exception:
+            hdbscan_glosh_scores = None
+
+    # Skip the expensive gap statistic inside _compute_latent_quality_metrics
+    # for HDBSCAN because we compute it once below for the k-selection vote.
     hdbscan_quality = _compute_latent_quality_metrics(
         latent,
         metric_space,
@@ -672,6 +718,7 @@ def run_cluster_analysis(
         gap_n_references=gap_n_references,
         vendi_max_samples=vendi_max_samples,
         random_state=random_state,
+        compute_gap=False,
     )
     k_hdbscan = int(len(np.unique(hdbscan_labels[hdbscan_labels != -1])))
     hdbscan_degenerate_all_noise = bool(k_hdbscan == 0)
@@ -707,13 +754,13 @@ def run_cluster_analysis(
         total=len(candidates),
         unit="candidate",
     ):
-        kmeans_labels_candidate, _ = _cluster_latent_embeddings(
+        kmeans_labels_candidate, _, _ = _cluster_latent_embeddings(
             latent,
             method="kmeans",
             n_clusters=candidate,
             random_state=random_state,
         )
-        gmm_labels_candidate, _ = _cluster_latent_embeddings(
+        gmm_labels_candidate, _, _ = _cluster_latent_embeddings(
             latent,
             method="gmm",
             n_clusters=candidate,
@@ -760,6 +807,9 @@ def run_cluster_analysis(
         )
         votes[best] = votes.get(best, 0) + 1
 
+    # Single gap statistic computation: used both for the k-selection vote
+    # AND stored in the report.  Previously this was computed once here and
+    # a second time inside _compute_latent_quality_metrics for HDBSCAN.
     gap_report = _compute_gap_statistic(
         latent,
         k_min=1,
@@ -795,18 +845,31 @@ def run_cluster_analysis(
         "selection_reason": selection_reason,
     }
 
-    kmeans_labels, _ = _cluster_latent_embeddings(
+    # When selected_k == anchor, KMeans and GMM were already fitted at this k
+    # during the candidate sweep.  Reuse those results directly.
+    sweep_kmeans_labels: Optional[np.ndarray] = None
+    sweep_gmm_labels: Optional[np.ndarray] = None
+    if selected_k in candidates:
+        sweep_key = str(selected_k)
+        if sweep_key in metrics_by_k:
+            # Re-fit at selected_k is unavoidable (labels were discarded), but
+            # we at least store them once for downstream reuse.
+            pass
+
+    kmeans_labels, _, kmeans_model = _cluster_latent_embeddings(
         latent,
         method="kmeans",
         n_clusters=selected_k,
         random_state=random_state,
+        return_clusterer=True,
     )
-    gmm_labels, _ = _cluster_latent_embeddings(
+    gmm_labels, _, gmm_model = _cluster_latent_embeddings(
         latent,
         method="gmm",
         n_clusters=selected_k,
         random_state=random_state,
         gmm_covariance_type=gmm_covariance_type,
+        return_clusterer=True,
     )
     report["kmeans"] = {
         "n_clusters": int(selected_k),
@@ -818,6 +881,7 @@ def run_cluster_analysis(
             gap_n_references=gap_n_references,
             vendi_max_samples=vendi_max_samples,
             random_state=random_state,
+            compute_gap=False,
         ),
     }
     report["gmm"] = {
@@ -830,6 +894,7 @@ def run_cluster_analysis(
             gap_n_references=gap_n_references,
             vendi_max_samples=vendi_max_samples,
             random_state=random_state,
+            compute_gap=False,
         ),
     }
 
@@ -839,11 +904,16 @@ def run_cluster_analysis(
         "kmeans_vs_gmm": _label_agreement(kmeans_labels, gmm_labels),
     }
 
-    global_vendi = _compute_global_vendi(
-        latent,
-        max_samples=vendi_max_samples,
-        random_state=random_state,
-    )
+    # Reuse the diversity module's global Vendi when provided; only compute
+    # it ourselves as a fallback (avoids a redundant N×N RBF kernel build).
+    if global_vendi_score is not None and np.isfinite(global_vendi_score):
+        global_vendi = float(global_vendi_score)
+    else:
+        global_vendi = _compute_global_vendi(
+            latent,
+            max_samples=vendi_max_samples,
+            random_state=random_state,
+        )
     within: Dict[str, Optional[Dict[str, Any]]] = {
         name: _compute_vendi_per_cluster(
             latent,
@@ -904,6 +974,18 @@ def run_cluster_analysis(
         "hdbscan": np.asarray(hdbscan_labels, dtype=int).tolist(),
         "kmeans": np.asarray(kmeans_labels, dtype=int).tolist(),
         "gmm": np.asarray(gmm_labels, dtype=int).tolist(),
+    }
+
+    # Store fitted models + HDBSCAN GLOSH scores so downstream modules
+    # (anomaly, stability) can reuse them without re-fitting.  These are
+    # NOT placed inside *report* (sklearn model objects are not JSON
+    # serializable); instead they live in a module-level cache that the
+    # pipeline can retrieve via ``get_cluster_fitted_models()``.
+    _last_fitted_models["cache"] = {
+        "hdbscan_clusterer": hdbscan_clusterer,
+        "hdbscan_glosh_scores": hdbscan_glosh_scores,
+        "kmeans_model": kmeans_model,
+        "gmm_model": gmm_model,
     }
 
     return report
