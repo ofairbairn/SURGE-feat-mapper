@@ -1,6 +1,6 @@
 workflow:
   workflow_type: mapper
-  dataset_path: "C:\\Users\\Bipo1\\Downloads\\New equilibrium dataset\\new_equilibrium_data.csv"
+  dataset_path: "C:\\Users\\Bipo1\\Downloads\\New equilibrium dataset\\no_empty_columns.csv"
   dataset_format: auto
   # dataset_source: M3D-C1 batch-dir loading ("m3dc1_batch" / "m3dc1_batch_per_mode")
   # is not wired up for workflow_type=mapper yet -- leave null for a CSV/parquet path.
