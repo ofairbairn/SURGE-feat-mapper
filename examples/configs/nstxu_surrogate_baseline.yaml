@@ -1,0 +1,50 @@
+# SURGE surrogate run on the NSTX equilibrium dataset -- BASELINE (pre-Mapper-curation).
+#
+# Run from the repo root:
+#   python examples/run_workflow.py --spec examples/configs/nstxu_surrogate_baseline.yaml
+#
+# This is the "before" half of the mapper-curation experiment: same dataset
+# Mapper was run on (runs/nstx_eq_no_empty_colrow), same input/output split,
+# trained as-is with no Mapper-driven row/feature curation applied yet.
+# After curating the dataset based on Mapper's findings (anomaly-flagged rows,
+# HDBSCAN noise points, near-zero-attribution features, etc.), copy this file,
+# point dataset_path at the curated CSV, change run_tag, and diff the two
+# runs' metrics.json files.
+
+dataset_path: "C:\\Users\\Bipo1\\.cache\\huggingface\\hub\\datasets--SURGE-AIML--tokamakergen-nstxu-run10k\\snapshots\\a5830aeabf742f48dd4595e53376885f221be46f\\nstxu_RUN_10k_light\\nstxu_RUN_10k\\surrogate_dataset.csv"
+dataset_format: auto
+metadata_path: examples/configs/nstxu_surrogate_meta.yaml
+
+test_fraction: 0.2
+val_fraction: 0.1
+standardize_inputs: true
+standardize_outputs: true
+seed: 42
+
+output_dir: .
+run_tag: nstx_surrogate_baseline
+overwrite_existing_run: false
+
+resources:
+  device: cpu
+  num_workers: 2
+
+models:
+  - key: sklearn.random_forest
+    name: rf_baseline
+    params:
+      n_estimators: 300
+      max_depth: 12
+      min_samples_leaf: 2
+      n_jobs: -1
+      random_state: 42
+
+  - key: pytorch.residual_mlp
+    name: resmlp_baseline
+    params:
+      hidden_layers: [256, 128]
+      n_epochs: 300
+      learning_rate: 0.001
+      dropout_rate: 0.2
+      patience: 25
+      random_state: 42
