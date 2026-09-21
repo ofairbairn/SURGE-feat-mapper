@@ -21,7 +21,7 @@ if str(_REPO) not in sys.path:
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Run a SURGE Mapper workflow (representation ladder + diversity)."
+		description="Run a SURGE Mapper red uci."
 	)
 	parser.add_argument(
 		"--config",

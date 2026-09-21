@@ -8,7 +8,8 @@ from importlib.resources import path
 from pathlib import Path
 
 import yaml
-
+import os
+os.environ.setdefault("MPLBACKEND", "Agg")
 import surge  # noqa: F401 - ensure adapters are registered
 #from surge.viz import viz_run
 from surge.workflow.run import run_workflow

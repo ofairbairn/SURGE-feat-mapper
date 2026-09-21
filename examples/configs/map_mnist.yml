@@ -2,6 +2,8 @@ workflow:
   workflow_type: mapper
   dataset_path: "C:\\Users\\Bipo1\\Downloads\\Kaggle MNIST CSV Data\\mnist_full.csv"
   dataset_format: auto
+  dataset_source: null
+  metadata_path: null
   task_type: unsupervised
   # Exclude the supervised ASL class label from reconstruction features.
   metadata_overrides:
@@ -11,16 +13,24 @@ workflow:
   test_fraction: 0.2
   val_fraction: 0.1
   seed: 42
-  output_dir: runs
+  output_dir: .
+  run_tag: mnist
+  overwrite_existing_run: false
   # Mapper ladder gate keys (val RMSE).
   unsupervised_ladder_thresholds:
-    pca_max_recon_rmse: 0.15
-    ae_max_recon_rmse: 0.18
-    vae_max_recon_rmse: 0.20
+    pca_max_recon_rmse: 0.0
+    ae_max_recon_rmse: 0.0
+    vae_max_recon_rmse: 0.0
+  mapper_preprocess:
+    enabled: true
+    save_plots: true
   mapper_diversity:
     enabled: true
     kernel: rbf
+    rbf_bandwidth: null
     max_samples: 2000
+    q_values: null
+    random_state: 42
     save_similarity_matrix: true
   # Hopkins is the automated clustering gate. VAT/iVAT are saved for visual
   # inspection; max_samples bounds their O(n^2) distance matrices.
@@ -46,8 +56,31 @@ workflow:
     hdbscan_min_samples: null
     gmm_covariance_type: full
     random_state: 42
+  mapper_stability:
+    enabled: true
+    n_bootstraps: 10
+    bootstrap_fraction: 0.8
+    max_samples: 1000
+    random_state: 42
   # Emits latent (UMAP/t-SNE) and reconstruction plots into runs/.../visualization
   # as soon as the mapper run ends, from the in-memory latent and model.
+  mapper_anomaly:
+    enabled: true
+    top_n: 10
+    reason_quantile: 0.9
+    isolation_forest_n_estimators: 100
+    isolation_forest_contamination: auto
+    lof_n_neighbors: 20
+    lof_contamination: auto
+    vendi_max_samples: 200
+    rbf_bandwidth: null
+    random_state: 42
+  mapper_attribution:
+    enabled: true
+    max_axes: 3
+    n_background: 100
+    top_k: 10
+    random_state: 42
   mapper_visualization:
     enabled: true
     random_state: 42
@@ -61,12 +94,12 @@ workflow:
   #                 latents onto reference_run's anchors (scipy.spatial's
   #                 rotation/reflection/scale convention) so cluster
   #                 identities and Atlas positions survive the retrain.
-  # mapper_align:
-  #   enabled: true
-  #   mode: skip
-  #   reference_run: runs/mnist_mapper_20260101-000000
-  #   n_anchor: 500
-  #   random_state: 42
+  mapper_align:
+    enabled: true
+    mode: skip
+    reference_run: null
+    n_anchor: 500
+    random_state: 42
 
   models:
     - key: sklearn.pca
@@ -89,7 +122,7 @@ workflow:
       name: VAE
       params:
         latent_dim: 8
-        channels: [32, 64, 128]
+        channels: [128, 64, 32]
         n_epochs: 150
         batch_size: 128
         learning_rate: 0.001
