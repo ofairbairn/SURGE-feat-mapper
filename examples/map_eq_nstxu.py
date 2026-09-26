@@ -1,6 +1,4 @@
-"""
-flattened chinese mnist data run through mapper
-"""
+"""Run a SURGE Mapper workflow on NSTXU Equilibrium data."""
 
 from __future__ import annotations
 
@@ -16,14 +14,14 @@ import surge  # noqa: F401 - ensure adapters are registered
 from surge.workflow.run import run_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 
-DEFAULT_CONFIG = Path("examples/configs/map_chinese.yml")
+DEFAULT_CONFIG = Path("examples/configs/map_eq_nstxu.yaml")
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
 	sys.path.insert(0, str(_REPO))
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Run a SURGE Mapper workflow (representation ladder + diversity)."
+		description="Run nstxu equilibrium data through Mapper"
 	)
 	parser.add_argument(
 		"--config",

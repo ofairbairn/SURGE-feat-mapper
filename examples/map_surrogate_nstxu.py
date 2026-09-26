@@ -1,25 +1,27 @@
-"""Run the SURGE Mapper ladder on a generated swiss roll incomplete dataset."""
+"""Run the SURGE Mapper on a surrogate dataset."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 import yaml
 
+os.environ.setdefault("MPLBACKEND", "Agg")
 import surge  # noqa: F401 - register model adapters
 
 from surge.workflow.run import run_workflow
 from surge.workflow.spec import SurrogateWorkflowSpec
 
 _REPO = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = _REPO / "examples" / "configs" / "map_incomplete.yaml"
+DEFAULT_CONFIG = _REPO / "examples" / "configs" / "map_surrogate_nstxu.yaml"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Test structure reporting with synth data."
+        description="curate surrogate dataset"
     )
     parser.add_argument(
         "--config",
@@ -43,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         invocation={"script": str(Path(__file__).resolve()), "spec_path": str(config_path)},
     )
 
-    print("swiss roll incomplete Mapper workflow complete.")
+    print("Surrogate Mapper workflow complete.")
     ladder = summary["representation_ladder"]
     print(f"Selected representation: {ladder['selected_rung']}")
     print("Validation reconstruction RMSE:")

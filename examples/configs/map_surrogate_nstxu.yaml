@@ -1,0 +1,167 @@
+workflow:
+  workflow_type: mapper
+  dataset_path: "C:\\Users\\Bipo1\\.cache\\huggingface\\hub\\datasets--SURGE-AIML--tokamakergen-nstxu-run10k\\snapshots\\a5830aeabf742f48dd4595e53376885f221be46f\\nstxu_RUN_10k_light\\nstxu_RUN_10k\\surrogate_dataset.csv"
+  dataset_format: auto
+  # dataset_source: M3D-C1 batch-dir loading ("m3dc1_batch" / "m3dc1_batch_per_mode")
+  # is not wired up for workflow_type=mapper yet -- leave null for a CSV/parquet path.
+  dataset_source: null
+  metadata_path: null
+  task_type: unsupervised
+  test_fraction: 0.2
+  val_fraction: 0.1
+  seed: 42
+  sample_rows: null
+  # Analyzer hints/overrides used when SurrogateDataset infers column roles.
+  analyzer: {}
+  # Excludes non-numeric/flag columns from Mapper's reconstruction inputs;
+  # "outputs" here just means "not a scaled input" for this unsupervised run.
+  metadata_overrides:
+    # Exclude status/diagnostic fields and columns containing missing values;
+    # Mapper drops rows with NaN values in its reconstruction inputs.
+    outputs: [plasma_configuration, Converged, Diverted, "GS error", "growth_rate [s^-1]", delta_u, delta_l, kappa_u, kappa_l, kappa, delta]
+  # Mapper input-layout hints. "auto" infers from metadata/column names;
+  # image data additionally needs input_shape as (C, H, W).
+  data_type: tabular
+  input_shape: null
+  output_dir: .
+  run_tag: sep21_nstx_surrogate_mapper
+  overwrite_existing_run: false
+  # Mapper ladder gate keys (val RMSE). Rungs always run PCA -> AE -> VAE in
+  # that fixed order; the first rung meeting its threshold is selected.
+  unsupervised_ladder_thresholds:
+    pca_max_recon_rmse: 20
+    ae_max_recon_rmse: 20
+    vae_max_recon_rmse: 20
+  # Missing-value detection, missingno plots, and MCAR testing on the raw
+  # Mapper input data (before the engine drops NaN rows).
+  mapper_preprocess:
+    enabled: true
+    save_plots: true
+  mapper_diversity:
+    enabled: true
+    kernel: rbf
+    # null/"auto"/"median" picks the RBF bandwidth automatically.
+    rbf_bandwidth: null
+    max_samples: 2000
+    # null uses every Vendi q value the diversity module reports by default.
+    q_values: null
+    random_state: 42
+    save_similarity_matrix: true
+  # Hopkins is the automated clustering gate. VAT/iVAT are saved for visual
+  # inspection; max_samples bounds their O(n^2) distance matrices.
+  mapper_tendency:
+    enabled: true
+    hopkins_threshold: 0.65
+    hopkins_sample_size: null
+    max_samples: 1000
+    random_state: 42
+  # Runs only when the Hopkins gate passes. HDBSCAN always runs first and
+  # anchors k; silhouette/CH/DB/BIC vote within k_window of that anchor and
+  # the gap statistic adds a hint. k-means and GMM are then fit at selected_k
+  # and validated with ARI/AMI plus within/between-cluster Vendi.
+  mapper_clustering:
+    enabled: true
+    k_anchor: null
+    k_max: 20
+    k_window: 1
+    gap_k_max: 8
+    gap_n_references: 5
+    vendi_max_samples: 200
+    hdbscan_min_cluster_size: 20
+    hdbscan_min_samples: null
+    gmm_covariance_type: full
+    random_state: 42
+  mapper_stability:
+    enabled: true
+    n_bootstraps: 10
+    bootstrap_fraction: 0.8
+    max_samples: 1000
+    random_state: 42
+  # HDBSCAN/GMM density signals reuse mapper_clustering's
+  # hdbscan_min_cluster_size/hdbscan_min_samples/gmm_covariance_type.
+  mapper_anomaly:
+    enabled: true
+    top_n: 10
+    reason_quantile: 0.9
+    isolation_forest_n_estimators: 100
+    isolation_forest_contamination: auto
+    lof_n_neighbors: 20
+    lof_contamination: auto
+    vendi_max_samples: 200
+    # null/"auto" picks the marginal-Vendi RBF bandwidth automatically.
+    rbf_bandwidth: null
+    random_state: 42
+  # Raw-feature attribution for the selected representation: PCA reports
+  # pca.components_ loadings directly (no SHAP needed, exact and free).
+  # AE/VAE run shap.GradientExplainer on the fitted encoder, one explainer
+  # per latent axis (capped at max_axes), then aggregate into a per-HDBSCAN
+  # -cluster raw-feature ranking.
+  mapper_attribution:
+    enabled: true
+    # null explains every latent axis instead of capping at max_axes.
+    max_axes: 8
+    n_background: 100
+    n_explain: 200
+    top_k: 10
+    random_state: 42
+  # Emits latent (UMAP/t-SNE) and reconstruction plots into runs/.../visualization
+  # as soon as the mapper run ends, from the in-memory latent and model.
+  mapper_visualization:
+    enabled: true
+    random_state: 42
+  # Opt-in. Persists a reference-anchor subsample (align/reference_anchors.npz)
+  # so a later run can stay comparable to this one. mode:
+  #   skip          (default) just save this run's anchors for future use.
+  #   reuse_encoder load reference_run's saved encoder verbatim and skip
+  #                 training -- the latent space is already identical, no
+  #                 Procrustes needed.
+  #   realign       train a new encoder as usual, then Procrustes-align its
+  #                 latents onto reference_run's anchors (scipy.spatial's
+  #                 rotation/reflection/scale convention) so cluster
+  #                 identities and Atlas positions survive the retrain.
+  mapper_align:
+    enabled: true
+    mode: skip
+    reference_run: null
+    n_anchor: 500
+    random_state: 42
+
+  # The following SurrogateWorkflowSpec fields exist on the shared spec but
+  # are not read by Mapper/pipeline.py's run_mapper_workflow: it hardcodes
+  # standardize_inputs/standardize_outputs=False (Mapper owns preprocessing
+  # via its own DataScaler) and never touches cv_folds, predictions_scope,
+  # predictions_format, unsupervised_ladder_mode/order/emit_all, mlflow_*,
+  # pretrained_run_dir, finetune_lr_scale, notes, or the M3D-C1 batch_dir_*
+  # fields (those apply to the surrogate workflow / batch-dir dataset
+  # loader only). They are omitted here rather than set to misleading
+  # values.
+
+  models:
+    - key: sklearn.pca
+      name: PCA
+      params:
+        n_components: 2
+        svd_solver: auto
+        whiten: true
+    - key: pytorch.autoencoder
+      name: Autoencoder
+      params:
+        latent_dim: 8
+        hidden_dims: [128, 64, 32, 16, 8]
+        n_epochs: 150
+        batch_size: 128
+        learning_rate: 0.001
+        device: cpu
+        verbose: true
+    - key: pytorch.unsupervised_vae
+      name: VAE
+      params:
+        latent_dim: 8
+        hidden_dims: [128, 64, 32, 16, 8]
+        n_epochs: 150
+        batch_size: 128
+        learning_rate: 0.001
+        beta: 1.0
+        max_grad_norm: 1.0
+        device: cpu
+        verbose: true
